@@ -1,0 +1,39 @@
+# Build artifacts
+dist/
+build/
+node_modules/
+*.tar.gz
+*.zip
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Temporary
+/tmp/
+/temp/
+*.tmp
+
+# Don't ignore important docs or config
+!*.md
+!docker-compose.yml
+!Makefile
+!.github/
+!schema/
