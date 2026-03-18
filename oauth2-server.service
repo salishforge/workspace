@@ -1,0 +1,18 @@
+[Unit]
+Description=OAuth2 Authorization Server (Salish Forge)
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=artificium
+WorkingDirectory=/home/artificium
+ExecStart=/usr/bin/node oauth2-server.js
+Restart=always
+RestartSec=10
+Environment="NODE_ENV=production"
+Environment="PORT=3005"
+EnvironmentFile=/home/artificium/.oauth2.env
+
+[Install]
+WantedBy=multi-user.target
