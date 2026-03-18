@@ -18,6 +18,7 @@ import express from 'express';
 import pg from 'pg';
 import { randomBytes, scrypt, timingSafeEqual } from 'crypto';
 import { promisify } from 'util';
+import { createAuthCodeRouter, initializeAuthCodeSchema, computeCodeChallenge } from './oauth2/auth-code-flow.js';
 
 const scryptAsync = promisify(scrypt);
 
@@ -104,6 +105,10 @@ app.disable('x-powered-by');
 app.use(express.json({ limit: '4kb' }));
 app.use(express.urlencoded({ extended: false, limit: '4kb' }));
 
+// ─── Auth Code Flow routes ─────────────────────────────────────────────────
+// Mounted at /oauth2/* — handles login, consent, logout, and error pages.
+// Token exchange for authorization_code grant is handled below in /oauth2/token.
+
 // ─── POST /oauth2/token ───────────────────────────────────────────────────────
 
 app.post('/oauth2/token', async (req, res) => {
@@ -123,8 +128,100 @@ app.post('/oauth2/token', async (req, res) => {
     return res.status(400).json({ error: 'invalid_request', error_description: 'grant_type is required' });
   }
 
+  // ── Authorization Code Flow ──
+  if (grant_type === 'authorization_code') {
+    const { code, redirect_uri, code_verifier } = req.body;
+
+    if (!code || !client_id || !redirect_uri) {
+      return res.status(400).json({
+        error: 'invalid_request',
+        error_description: 'code, client_id, and redirect_uri are required for authorization_code grant',
+      });
+    }
+
+    // Verify client identity (client_secret required unless PKCE-only)
+    let client;
+    try {
+      const result = await pool.query(
+        'SELECT client_id, client_secret_hash, scopes FROM oauth2_clients WHERE client_id = $1 AND active = true',
+        [client_id]
+      );
+      client = result.rows[0];
+    } catch (err) {
+      console.error('[oauth2] DB error on client lookup (auth_code):', err.message);
+      return res.status(500).json({ error: 'server_error' });
+    }
+
+    if (!client) {
+      return res.status(401).json({ error: 'invalid_client', error_description: 'Unknown client' });
+    }
+
+    // Verify client_secret if provided (optional when using PKCE without a secret)
+    if (client_secret) {
+      const secretValid = await verifySecret(client_secret, client.client_secret_hash);
+      if (!secretValid) {
+        return res.status(401).json({ error: 'invalid_client', error_description: 'Invalid client credentials' });
+      }
+    }
+
+    // Look up auth code
+    let authCode;
+    try {
+      const result = await pool.query(
+        `SELECT * FROM oauth2_authorization_codes
+         WHERE code = $1 AND expires_at > NOW()`,
+        [code]
+      );
+      authCode = result.rows[0];
+    } catch (err) {
+      console.error('[oauth2] DB error on auth code lookup:', err.message);
+      return res.status(500).json({ error: 'server_error' });
+    }
+
+    if (!authCode) {
+      return res.status(400).json({
+        error: 'invalid_grant',
+        error_description: 'Authorization code is invalid or has expired.',
+      });
+    }
+
+    // Validate client_id and redirect_uri match what was used in /authorize
+    if (authCode.client_id !== client_id) {
+      return res.status(400).json({ error: 'invalid_grant', error_description: 'client_id mismatch' });
+    }
+    if (authCode.redirect_uri !== redirect_uri) {
+      return res.status(400).json({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' });
+    }
+
+    // Verify PKCE if code_challenge was stored
+    if (authCode.code_challenge) {
+      if (!code_verifier) {
+        return res.status(400).json({
+          error: 'invalid_grant',
+          error_description: 'code_verifier is required (PKCE was used during authorization)',
+        });
+      }
+      const derived = computeCodeChallenge(code_verifier);
+      if (derived !== authCode.code_challenge) {
+        return res.status(400).json({
+          error: 'invalid_grant',
+          error_description: 'code_verifier does not match code_challenge',
+        });
+      }
+    }
+
+    // Single-use: delete the code immediately to prevent reuse
+    try {
+      await pool.query('DELETE FROM oauth2_authorization_codes WHERE code = $1', [code]);
+    } catch (err) {
+      console.error('[oauth2] DB error deleting auth code:', err.message);
+      // Non-fatal: continue, but log the anomaly
+    }
+
+    return await issueTokens(res, client_id, authCode.scope, authCode.user_id);
+
   // ── Client Credentials Flow ──
-  if (grant_type === 'client_credentials') {
+  } else if (grant_type === 'client_credentials') {
     if (!client_id || !client_secret) {
       return res.status(400).json({
         error: 'invalid_request',
@@ -185,7 +282,7 @@ app.post('/oauth2/token', async (req, res) => {
     let oldToken;
     try {
       const result = await pool.query(
-        `SELECT id, client_id, scopes FROM oauth2_tokens
+        `SELECT id, client_id, scopes, user_id FROM oauth2_tokens
          WHERE refresh_token = $1 AND revoked = false AND refresh_expires_at > NOW()`,
         [refresh_token]
       );
@@ -202,7 +299,7 @@ app.post('/oauth2/token', async (req, res) => {
     // Revoke old token (refresh token rotation)
     await pool.query('UPDATE oauth2_tokens SET revoked = true WHERE id = $1', [oldToken.id]);
 
-    return await issueTokens(res, oldToken.client_id, oldToken.scopes);
+    return await issueTokens(res, oldToken.client_id, oldToken.scopes, oldToken.user_id);
 
   } else {
     return res.status(400).json({ error: 'unsupported_grant_type' });
@@ -230,7 +327,11 @@ async function resolveClientScopes(dbPool, clientId, legacyScopes) {
   return (legacyScopes || '').split(/\s+/).filter(Boolean);
 }
 
-async function issueTokens(res, clientId, scopes) {
+/**
+ * Issue access + refresh tokens and send the JSON response.
+ * userId is optional — set for authorization_code grant, null for client_credentials.
+ */
+async function issueTokens(res, clientId, scopes, userId = null) {
   const accessToken = generateToken();
   const refreshToken = generateToken();
   const expiresAt = new Date(Date.now() + ACCESS_TOKEN_TTL_SECONDS * 1000);
@@ -238,22 +339,26 @@ async function issueTokens(res, clientId, scopes) {
 
   try {
     await pool.query(
-      `INSERT INTO oauth2_tokens (access_token, refresh_token, client_id, scopes, expires_at, refresh_expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [accessToken, refreshToken, clientId, scopes, expiresAt, refreshExpiresAt]
+      `INSERT INTO oauth2_tokens
+         (access_token, refresh_token, client_id, scopes, expires_at, refresh_expires_at, user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [accessToken, refreshToken, clientId, scopes, expiresAt, refreshExpiresAt, userId]
     );
   } catch (err) {
     console.error('[oauth2] DB error issuing tokens:', err.message);
     return res.status(500).json({ error: 'server_error' });
   }
 
-  return res.json({
+  const body = {
     access_token: accessToken,
     token_type: 'Bearer',
     expires_in: ACCESS_TOKEN_TTL_SECONDS,
     refresh_token: refreshToken,
     scope: scopes,
-  });
+  };
+  if (userId) body.user_id = userId;
+
+  return res.json(body);
 }
 
 // ─── POST /oauth2/introspect (RFC 7662) ───────────────────────────────────────
@@ -375,6 +480,19 @@ async function start() {
     console.error('[oauth2] Failed to connect to PostgreSQL:', err.message);
     process.exit(1);
   }
+
+  // Initialize auth code flow schema (idempotent)
+  try {
+    await initializeAuthCodeSchema(pool);
+  } catch (err) {
+    console.error('[oauth2] Auth code schema init failed:', err.message);
+    // Non-fatal: server still works for client_credentials flow
+  }
+
+  // Mount auth code flow routes at /oauth2
+  // issueTokens is passed as a factory so auth-code-flow can issue real tokens.
+  const authCodeRouter = createAuthCodeRouter(pool, issueTokens);
+  app.use('/oauth2', authCodeRouter);
 
   const server = app.listen(PORT, '127.0.0.1', () => {
     console.log(`[oauth2] Authorization server listening on port ${PORT}`);
