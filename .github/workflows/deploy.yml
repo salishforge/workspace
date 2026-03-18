@@ -1,0 +1,84 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to staging VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H $VPS_HOST >> ~/.ssh/known_hosts
+          
+          ssh -i ~/.ssh/deploy_key $VPS_USER@$VPS_HOST << 'EOF'
+            cd /home/$VPS_USER/salish-forge
+            git pull origin main
+            npm install
+            npm run build
+            sudo systemctl restart health-dashboard
+            sudo systemctl restart memforge
+            sudo systemctl restart hyphae
+          EOF
+
+      - name: Health check
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          sleep 5
+          curl -f http://$VPS_HOST:3000/health || exit 1
+          curl -f http://$VPS_HOST:3001/health || exit 1
+          curl -f http://$VPS_HOST:3002/health || exit 1
+
+  deploy-production:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [deploy-staging]
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to production
+        env:
+          VPS_HOST: ${{ secrets.VPS_PROD_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H $VPS_HOST >> ~/.ssh/known_hosts
+          
+          ssh -i ~/.ssh/deploy_key $VPS_USER@$VPS_HOST << 'EOF'
+            cd /home/$VPS_USER/salish-forge
+            git fetch --tags
+            git checkout ${{ github.ref_name }}
+            npm install
+            npm run build
+            sudo systemctl restart health-dashboard
+            sudo systemctl restart memforge
+            sudo systemctl restart hyphae
+          EOF
+
+      - name: Production health check
+        env:
+          VPS_HOST: ${{ secrets.VPS_PROD_HOST }}
+        run: |
+          sleep 5
+          curl -f http://$VPS_HOST:3000/health || exit 1
+          curl -f http://$VPS_HOST:3001/health || exit 1
+          curl -f http://$VPS_HOST:3002/health || exit 1

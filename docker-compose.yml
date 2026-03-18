@@ -1,0 +1,143 @@
+version: '3.9'
+
+services:
+  # Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: salish-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: salish_forge
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./memforge-standalone/schema/schema.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - salish-network
+
+  # Message Bus
+  nats:
+    image: nats:latest-alpine
+    container_name: salish-nats
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: -js
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - salish-network
+
+  # MemForge Service
+  memforge:
+    build:
+      context: ./memforge-standalone
+      dockerfile: Dockerfile
+    container_name: salish-memforge
+    environment:
+      PORT: 3001
+      PG_HOST: postgres
+      PG_PORT: 5432
+      PG_DATABASE: salish_forge
+      PG_USER: postgres
+      PG_PASSWORD: postgres
+      NATS_URL: nats://nats:4222
+      NODE_ENV: development
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - salish-network
+    volumes:
+      - ./memforge-standalone/src:/app/src
+
+  # Hyphae Service
+  hyphae:
+    build:
+      context: ./hyphae
+      dockerfile: Dockerfile
+    container_name: salish-hyphae
+    environment:
+      PORT: 3002
+      NATS_URL: nats://nats:4222
+      PG_HOST: postgres
+      PG_PORT: 5432
+      PG_DATABASE: salish_forge
+      PG_USER: postgres
+      PG_PASSWORD: postgres
+      NODE_ENV: development
+    ports:
+      - "3002:3002"
+    depends_on:
+      nats:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - salish-network
+    volumes:
+      - ./hyphae/src:/app/src
+
+  # Health Dashboard
+  dashboard:
+    build:
+      context: ./health-dashboard
+      dockerfile: Dockerfile
+    container_name: salish-dashboard
+    environment:
+      PORT: 3000
+      PG_HOST: postgres
+      PG_PORT: 5432
+      PG_DATABASE: salish_forge
+      PG_USER: postgres
+      PG_PASSWORD: postgres
+      NATS_URL: nats://nats:4222
+      NODE_ENV: development
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - salish-network
+    volumes:
+      - ./health-dashboard/src:/app/src
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  salish-network:
+    driver: bridge

@@ -1,0 +1,17 @@
+# Salish Forge Code Owners
+# This file specifies default reviewers for PRs
+
+# Core infrastructure
+/memforge-standalone/ @salishforge/infrastructure
+/hyphae/ @salishforge/infrastructure
+/health-dashboard/ @salishforge/infrastructure
+
+# CI/CD
+/.github/ @salishforge/infrastructure
+
+# Documentation
+/docs/ @salishforge/docs
+*.md @salishforge/docs
+
+# All other files
+* @salishforge/maintainers
