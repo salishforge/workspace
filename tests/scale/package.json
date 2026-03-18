@@ -1,0 +1,21 @@
+{
+  "name": "@salishforge/scale-tests",
+  "version": "1.2.0",
+  "type": "module",
+  "description": "Scale testing suite for Salish Forge v1.2.0 — validates 100+ concurrent agent workloads",
+  "scripts": {
+    "baseline":  "node runner.js --scenario baseline",
+    "scale":     "node runner.js --scenario linear-scale",
+    "burst":     "node runner.js --scenario peak-burst",
+    "sustained": "node runner.js --scenario sustained",
+    "all":       "node runner.js --scenario all",
+    "report":    "node lib/reporter.js --latest",
+    "k6:tokens": "k6 run k6/token-generation.js",
+    "k6:memory": "k6 run k6/memory-queries.js",
+    "k6:hyphae": "k6 run k6/service-registry.js",
+    "k6:full":   "k6 run k6/full-agent-lifecycle.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
