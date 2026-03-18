@@ -32,24 +32,32 @@ const pool = new pg.Pool({ connectionString: DATABASE_URL });
 
 // Client definitions — each gets a randomly generated secret
 // Override by setting env vars: DASHBOARD_SECRET, MEMFORGE_SECRET, HYPHAE_SECRET
+//
+// Scopes follow the service:action hierarchy defined in oauth2-scopes-schema.sql:
+//   memforge:read    memforge:write
+//   hyphae:read      hyphae:admin
+//   system:admin
 const CLIENTS = [
   {
     client_id: 'dashboard',
     secret: process.env.DASHBOARD_SECRET || randomBytes(20).toString('hex'),
-    scopes: 'memory:read memory:write',
+    scopes: 'memforge:read system:admin',
     description: 'Health Dashboard service',
+    scope_list: ['memforge:read', 'system:admin'],
   },
   {
     client_id: 'memforge',
     secret: process.env.MEMFORGE_SECRET || randomBytes(20).toString('hex'),
-    scopes: 'memory:read memory:write',
+    scopes: 'memforge:read memforge:write',
     description: 'MemForge memory service',
+    scope_list: ['memforge:read', 'memforge:write'],
   },
   {
     client_id: 'hyphae',
     secret: process.env.HYPHAE_SECRET || randomBytes(20).toString('hex'),
-    scopes: 'services:read services:write',
+    scopes: 'hyphae:read hyphae:admin',
     description: 'Hyphae federation core',
+    scope_list: ['hyphae:read', 'hyphae:admin'],
   },
 ];
 
@@ -76,8 +84,23 @@ async function seed() {
       [client.client_id, hash, client.scopes, client.description]
     );
 
+    // Seed normalized scope assignments (requires oauth2-scopes-schema.sql to have been applied)
+    try {
+      for (const scope of client.scope_list) {
+        await pool.query(
+          `INSERT INTO oauth2_client_scopes (client_id, scope_name)
+           VALUES ($1, $2)
+           ON CONFLICT DO NOTHING`,
+          [client.client_id, scope]
+        );
+      }
+      console.log(`[oauth2-seed] Upserted client: ${client.client_id} (scopes: ${client.scope_list.join(', ')})`);
+    } catch (err) {
+      // oauth2_client_scopes table may not exist yet — skip silently
+      console.log(`[oauth2-seed] Upserted client: ${client.client_id} (scope table not available: ${err.message})`);
+    }
+
     secrets.push({ client_id: client.client_id, secret: client.secret });
-    console.log(`[oauth2-seed] Upserted client: ${client.client_id}`);
   }
 
   console.log('\n[oauth2-seed] Seeding complete.\n');
@@ -88,19 +111,26 @@ async function seed() {
       console.log(`${client_id.toUpperCase()}_OAUTH2_SECRET=${secret}`);
     }
     console.log('\n=== .env snippets ===');
-    console.log('\n# /home/artificium/health-dashboard/.env');
+    console.log('\n# health-dashboard/.env');
     console.log(`OAUTH2_CLIENT_ID=dashboard`);
     console.log(`OAUTH2_CLIENT_SECRET=${secrets.find(s => s.client_id === 'dashboard').secret}`);
     console.log(`OAUTH2_TOKEN_URL=http://localhost:3005/oauth2/token`);
     console.log(`OAUTH2_INTROSPECT_URL=http://localhost:3005/oauth2/introspect`);
+    console.log(`# dashboard scopes: memforge:read system:admin`);
 
-    console.log('\n# /home/artificium/memforge/.env (add these lines)');
+    console.log('\n# memforge-standalone/.env');
+    console.log(`OAUTH2_CLIENT_ID=memforge`);
+    console.log(`OAUTH2_CLIENT_SECRET=${secrets.find(s => s.client_id === 'memforge').secret}`);
     console.log(`OAUTH2_INTROSPECT_URL=http://localhost:3005/oauth2/introspect`);
     console.log(`OAUTH2_REQUIRED=true`);
+    console.log(`# memforge scopes: memforge:read memforge:write`);
 
-    console.log('\n# /home/artificium/.hyphae.env (add these lines)');
+    console.log('\n# hyphae-service .env');
+    console.log(`OAUTH2_CLIENT_ID=hyphae`);
+    console.log(`OAUTH2_CLIENT_SECRET=${secrets.find(s => s.client_id === 'hyphae').secret}`);
     console.log(`OAUTH2_INTROSPECT_URL=http://localhost:3005/oauth2/introspect`);
-    console.log(`OAUTH2_REQUIRED=false`);
+    console.log(`OAUTH2_REQUIRED=true`);
+    console.log(`# hyphae scopes: hyphae:read hyphae:admin`);
   } else {
     console.log('Run with --show-secrets to print plaintext secrets for .env setup.');
   }

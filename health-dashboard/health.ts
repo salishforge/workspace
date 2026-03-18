@@ -9,6 +9,73 @@ import {
   agentMessageLatency,
 } from './metrics.js';
 
+// ── OAuth2 scope enforcement ───────────────────────────────────────────────────
+
+const INTROSPECT_URL =
+  process.env['OAUTH2_INTROSPECT_URL'] ?? 'http://localhost:3005/oauth2/introspect';
+
+interface TokenInfo {
+  active: boolean;
+  client_id: string;
+  scope: string;
+  cachedAt: number;
+}
+const TOKEN_CACHE = new Map<string, TokenInfo>();
+const CACHE_TTL_MS = 30_000;
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, entry] of TOKEN_CACHE) {
+    if (now - entry.cachedAt > CACHE_TTL_MS) TOKEN_CACHE.delete(token);
+  }
+}, 60_000).unref();
+
+async function getTokenInfo(token: string): Promise<TokenInfo | null> {
+  const cached = TOKEN_CACHE.get(token);
+  if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) return cached;
+  try {
+    const resp = await fetch(INTROSPECT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `token=${encodeURIComponent(token)}`,
+      signal: AbortSignal.timeout(5000),
+    });
+    const data = (await resp.json()) as TokenInfo;
+    TOKEN_CACHE.set(token, { ...data, cachedAt: Date.now() });
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+async function requireScopeHandler(
+  requiredScope: string,
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  const authHeader = req.headers['authorization'] as string | undefined;
+  if (!authHeader?.startsWith('Bearer ')) {
+    res.status(401).json({ error: 'unauthorized', error_description: 'Bearer token required' });
+    return;
+  }
+  const token = authHeader.slice(7);
+  const info = await getTokenInfo(token);
+  if (!info?.active) {
+    res.status(401).json({ error: 'invalid_token', error_description: 'Token expired or revoked' });
+    return;
+  }
+  const scopes = info.scope?.split(/\s+/).filter(Boolean) ?? [];
+  if (!scopes.includes(requiredScope)) {
+    console.warn(
+      `[dashboard:scope] DENIED client=${info.client_id} required=${requiredScope} granted=${info.scope} ${req.method} ${req.path}`,
+    );
+    res.status(403).json({ error: 'insufficient_scope', required_scope: requiredScope });
+    return;
+  }
+  next();
+}
+
 interface AgentStatus {
   agentId: string;
   status: 'healthy' | 'degraded' | 'dead';
@@ -221,12 +288,18 @@ export class HealthDashboard {
 
   private setupRoutes(): void {
     this.app.get('/health', this.handleHealthCheck.bind(this));
-    this.app.get('/metrics', this.handleMetrics.bind(this));
+    this.app.get(
+      '/metrics',
+      (req, res, next) => requireScopeHandler('system:admin', req, res, next),
+      this.handleMetrics.bind(this),
+    );
     this.app.get('/healthz', this.handleLiveness.bind(this));
     this.app.get('/api/spec.json', (_req, res) => res.json(openApiSpec));
     this.app.get('/api/docs', (_req, res) =>
-      res.type('html').send(swaggerUiHtml('/api/spec.json', 'Health Dashboard API Docs'))
+      res.type('html').send(swaggerUiHtml('/api/spec.json', 'Health Dashboard API Docs')),
     );
+    // Display granted scopes for the calling client (requires valid token)
+    this.app.get('/api/scopes', this.handleScopesCheck.bind(this));
   }
 
   private async handleHealthCheck(req: Request, res: Response): Promise<void> {
@@ -343,6 +416,24 @@ export class HealthDashboard {
 
     res.set('Content-Type', registry.contentType);
     res.send(await registry.metrics());
+  }
+
+  private async handleScopesCheck(req: Request, res: Response): Promise<void> {
+    const authHeader = req.headers['authorization'] as string | undefined;
+    if (!authHeader?.startsWith('Bearer ')) {
+      res.status(401).json({ error: 'unauthorized', error_description: 'Bearer token required' });
+      return;
+    }
+    const token = authHeader.slice(7);
+    const info = await getTokenInfo(token);
+    if (!info?.active) {
+      res.status(401).json({ error: 'invalid_token' });
+      return;
+    }
+    res.json({
+      client_id: info.client_id,
+      granted_scopes: info.scope?.split(/\s+/).filter(Boolean) ?? [],
+    });
   }
 
   private async handleLiveness(req: Request, res: Response): Promise<void> {

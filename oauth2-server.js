@@ -153,7 +153,28 @@ app.post('/oauth2/token', async (req, res) => {
       return res.status(401).json({ error: 'invalid_client', error_description: 'Invalid credentials' });
     }
 
-    return await issueTokens(res, client.client_id, client.scopes);
+    // Resolve the client's authorized scopes (new normalized table, fallback to legacy column)
+    const allowedScopes = await resolveClientScopes(pool, client.client_id, client.scopes);
+
+    // Optional: client requests a specific subset of scopes
+    const requestedRaw = typeof req.body.scope === 'string' ? req.body.scope.trim() : null;
+    let grantedScopes;
+    if (requestedRaw) {
+      const requested = requestedRaw.split(/\s+/).filter(Boolean);
+      const unauthorized = requested.filter(s => !allowedScopes.includes(s));
+      if (unauthorized.length > 0) {
+        console.warn(`[oauth2] scope escalation attempt client=${client.client_id} unauthorized=${unauthorized.join(' ')}`);
+        return res.status(400).json({
+          error: 'invalid_scope',
+          error_description: `Client not authorized for scope(s): ${unauthorized.join(' ')}`,
+        });
+      }
+      grantedScopes = requested;
+    } else {
+      grantedScopes = allowedScopes;
+    }
+
+    return await issueTokens(res, client.client_id, grantedScopes.join(' '));
 
   // ── Refresh Token Flow ──
   } else if (grant_type === 'refresh_token') {
@@ -187,6 +208,27 @@ app.post('/oauth2/token', async (req, res) => {
     return res.status(400).json({ error: 'unsupported_grant_type' });
   }
 });
+
+/**
+ * Resolve the set of scopes a client is authorized for.
+ * Checks the normalized oauth2_client_scopes table first;
+ * falls back to the legacy space-separated scopes column.
+ */
+async function resolveClientScopes(dbPool, clientId, legacyScopes) {
+  try {
+    const result = await dbPool.query(
+      'SELECT scope_name FROM oauth2_client_scopes WHERE client_id = $1',
+      [clientId]
+    );
+    if (result.rows.length > 0) {
+      return result.rows.map(r => r.scope_name);
+    }
+  } catch {
+    // oauth2_client_scopes table may not exist yet — fall through to legacy
+  }
+  // Legacy: parse the space-separated scopes column
+  return (legacyScopes || '').split(/\s+/).filter(Boolean);
+}
 
 async function issueTokens(res, clientId, scopes) {
   const accessToken = generateToken();
@@ -269,6 +311,20 @@ app.post('/oauth2/revoke', async (req, res) => {
   }
 
   return res.json({ revoked: true });
+});
+
+// ─── GET /oauth2/scopes ───────────────────────────────────────────────────────
+
+app.get('/oauth2/scopes', async (_req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT scope, description, restricted FROM oauth2_scope_definitions ORDER BY scope'
+    );
+    res.json({ scopes: result.rows });
+  } catch (err) {
+    // Table may not exist yet if migration hasn't run
+    res.status(503).json({ error: 'server_error', error_description: err.message });
+  }
 });
 
 // ─── GET /oauth2/health ───────────────────────────────────────────────────────
