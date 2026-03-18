@@ -1,0 +1,128 @@
+# Prometheus Alert Rules — Salish Forge Platform
+# Deploy via: prometheus --config.file=prometheus.yml
+# Reference this file in prometheus.yml under rule_files:
+#   rule_files:
+#     - /path/to/alert-rules.yml
+
+groups:
+  - name: salishforge.latency
+    rules:
+      # p95 request latency exceeds 200ms over a 5-minute window
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (job, le)
+          ) > 0.2
+        for: 2m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "High p95 latency on {{ $labels.job }}"
+          description: >
+            p95 request latency for {{ $labels.job }} is {{ $value | humanizeDuration }}
+            (threshold: 200ms). Sustained for 2 minutes.
+          runbook: "Check slow routes with histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) by (le, route)"
+
+  - name: salishforge.errors
+    rules:
+      # Error rate (5xx) exceeds 1% of total requests over 5 minutes
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status_code=~"5.."}[5m])) by (job)
+            /
+            sum(rate(http_requests_total[5m])) by (job)
+          ) > 0.01
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "High error rate on {{ $labels.job }}"
+          description: >
+            {{ $labels.job }} error rate is {{ $value | humanizePercentage }}
+            (threshold: 1%). Sustained for 1 minute.
+          runbook: "Check logs: curl http://<host>:<port>/api/v1/logs?level=error"
+
+      # 4xx client error rate unusually high (may indicate bad clients or auth issues)
+      - alert: HighClientErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status_code=~"4.."}[5m])) by (job)
+            /
+            sum(rate(http_requests_total[5m])) by (job)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "High 4xx rate on {{ $labels.job }}"
+          description: >
+            {{ $labels.job }} 4xx rate is {{ $value | humanizePercentage }}
+            (threshold: 5%). May indicate bad clients or misconfigured integrations.
+
+  - name: salishforge.availability
+    rules:
+      # Service is not scraped for more than 60 seconds
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: >
+            Prometheus cannot reach {{ $labels.job }} at {{ $labels.instance }}.
+            Target has been unreachable for over 60 seconds.
+          runbook: "Check systemd unit: systemctl status <service>. Check port: ss -tlnp"
+
+  - name: salishforge.resources
+    rules:
+      # Process RSS memory exceeds 512MB
+      - alert: HighMemoryUsage
+        expr: |
+          (
+            tidepool_process_resident_memory_bytes > 536870912
+            or memforge_process_resident_memory_bytes > 536870912
+            or dashboard_process_resident_memory_bytes > 536870912
+          )
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "High memory usage detected"
+          description: >
+            A service process is using more than 512MB RSS.
+            Value: {{ $value | humanize1024 }}B
+
+      # Database pool exhaustion — waiting connections > 0 for sustained period
+      - alert: DBPoolExhausted
+        expr: database_pool_connections{state="waiting"} > 0
+        for: 2m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "MemForge database pool has waiting connections"
+          description: >
+            {{ $value }} connection(s) are waiting for a free slot in the
+            PostgreSQL pool. Consider increasing DB_POOL_MAX.
+
+  - name: salishforge.agents
+    rules:
+      # Any agent in dead state for more than 2 minutes
+      - alert: AgentDead
+        expr: agents_health{status="dead"} == 2
+        for: 2m
+        labels:
+          severity: warning
+          team: agents
+        annotations:
+          summary: "Agent {{ $labels.agent_id }} is dead"
+          description: >
+            Agent {{ $labels.agent_id }} has not sent a heartbeat for more
+            than 30 seconds and has been in dead state for 2+ minutes.
