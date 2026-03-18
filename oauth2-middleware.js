@@ -119,6 +119,74 @@ export function createOAuth2Middleware(options = {}) {
 }
 
 /**
+ * Create scope authorization middleware.
+ *
+ * Must run AFTER createOAuth2Middleware (requires req.oauth2 to be set).
+ *
+ * Usage:
+ *   import { createOAuth2Middleware, createScopeMiddleware } from './oauth2-middleware.js';
+ *
+ *   app.use(createOAuth2Middleware());
+ *   app.post('/api/memory/:id/add', createScopeMiddleware('memforge:write'), handler);
+ *
+ * @param {string} requiredScope - The scope that must be present in the token
+ * @param {object} [options]
+ * @param {import('pg').Pool} [options.auditPool] - Optional PG pool for audit logging to oauth2_auth_denials
+ * @returns {import('express').RequestHandler}
+ */
+export function createScopeMiddleware(requiredScope, options = {}) {
+  const auditPool = options.auditPool || null;
+
+  return function scopeCheck(req, res, next) {
+    const oauth2 = req.oauth2;
+
+    // No oauth2 context — auth middleware must run first
+    if (!oauth2) {
+      return res.status(401).json({
+        error: 'unauthorized',
+        error_description: 'Bearer token authentication required',
+      });
+    }
+
+    const grantedScopes = (oauth2.scope || '').split(/\s+/).filter(Boolean);
+
+    if (grantedScopes.includes(requiredScope)) {
+      return next();
+    }
+
+    // Build structured denial log entry
+    const denial = {
+      client_id: oauth2.client_id,
+      required_scope: requiredScope,
+      granted_scopes: oauth2.scope || '',
+      method: req.method,
+      path: req.path,
+      ip: req.ip || 'unknown',
+      ts: new Date().toISOString(),
+    };
+
+    console.warn(`[scope] DENIED ${JSON.stringify(denial)}`);
+
+    // Persist to audit table if a pool is provided
+    if (auditPool) {
+      auditPool
+        .query(
+          `INSERT INTO oauth2_auth_denials (client_id, token_scope, required_scope, path, method, ip)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [oauth2.client_id, oauth2.scope || '', requiredScope, req.path, req.method, req.ip || null]
+        )
+        .catch(err => console.error('[scope] audit log write failed:', err.message));
+    }
+
+    return res.status(403).json({
+      error: 'insufficient_scope',
+      error_description: `Required scope: ${requiredScope}`,
+      scope: requiredScope,
+    });
+  };
+}
+
+/**
  * OAuth2 client helper — manages token acquisition and refresh.
  *
  * Usage:
