@@ -100,6 +100,9 @@ export class FlintAgentReal extends HyphaeAgent {
       case "deploy_component":
         return this.deployComponent(params, traceId);
 
+      case "chat":
+        return this.chat(params, traceId);
+
       case "status":
         return this.getStatus();
 
@@ -436,6 +439,43 @@ Format as JSON with step-by-step instructions.`;
         error: err.message,
         traceId,
       };
+    }
+  }
+
+  /**
+   * Chat with Flint using Gemini
+   */
+  private async chat(
+    params: Record<string, any>,
+    traceId: string
+  ): Promise<any> {
+    const { message } = params;
+
+    if (!message) {
+      throw new Error("Message parameter required for chat capability");
+    }
+
+    this.log("INFO", `Chat message received: ${message}`);
+
+    try {
+      const prompt = `You are Flint, the Chief Technology Officer of Salish Forge. Respond conversationally and helpfully to this message from your colleague:
+
+Message: "${message}"
+
+Be professional, direct, and provide helpful insights based on your role as CTO. Keep response concise (2-3 sentences max).`;
+
+      const result = await this.model.generateContent(prompt);
+      const response = result.response.text();
+
+      return {
+        success: true,
+        agentId: "flint",
+        response: response,
+        traceId,
+      };
+    } catch (error: any) {
+      this.log("ERROR", `Chat failed: ${error.message}`);
+      throw error;
     }
   }
 

@@ -104,6 +104,9 @@ export class ClioAgentReal extends HyphaeAgent {
       case "get_priorities":
         return this.getPriorities();
 
+      case "chat":
+        return this.chat(params, traceId);
+
       case "status":
         return this.getStatus();
 
@@ -500,6 +503,43 @@ Format as JSON.`;
       updated: new Date().toISOString(),
       nextReview: "Monday 09:00 UTC",
     };
+  }
+
+  /**
+   * Chat with Clio using Gemini
+   */
+  private async chat(
+    params: Record<string, any>,
+    traceId: string
+  ): Promise<any> {
+    const { message } = params;
+
+    if (!message) {
+      throw new Error("Message parameter required for chat capability");
+    }
+
+    this.log("INFO", `Chat message received: ${message}`);
+
+    try {
+      const prompt = `You are Clio, the Chief of Staff of Salish Forge. Respond conversationally and helpfully to this message from your colleague:
+
+Message: "${message}"
+
+Be professional, strategic, and provide helpful insights based on your role as Chief of Staff. Keep response concise (2-3 sentences max).`;
+
+      const result = await this.model.generateContent(prompt);
+      const response = result.response.text();
+
+      return {
+        success: true,
+        agentId: "clio",
+        response: response,
+        traceId,
+      };
+    } catch (error: any) {
+      this.log("ERROR", `Chat failed: ${error.message}`);
+      throw error;
+    }
   }
 
   /**

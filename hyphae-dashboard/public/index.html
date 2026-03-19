@@ -624,8 +624,8 @@
           body: JSON.stringify({
             sourceAgent: 'john-broker',
             targetAgent: currentAgent.agentId,
-            capability: 'status',
-            params: { task: message },
+            capability: 'chat',
+            params: { message: message },
             timeout: 30000,
           }),
         });

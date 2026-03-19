@@ -1,0 +1,54 @@
+{
+  "task_id": "test-clio-001",
+  "task_type": "infrastructure_audit",
+  "urgency": "low",
+  "timestamp": "2026-03-18T22:51:00Z",
+  "from": "flint",
+  "to": "clio",
+  
+  "subject": "TEST: Tidepool VPS Infrastructure Status",
+  "description": "Quick audit of Tidepool deployment on VPS. Return structured JSON with status.",
+  
+  "task": {
+    "action": "audit_tidepool_deployment",
+    "scope": "VPS infrastructure",
+    "checks": [
+      "Is tidepool-clio.service running?",
+      "Is NATS server running and healthy?",
+      "What is current PostgreSQL status?",
+      "Are all required ports accessible (3000, 3001, 3002, 3003, 3004, 3005)?",
+      "What is current disk usage on /home/artificium/dev/tidepool?"
+    ]
+  },
+  
+  "expected_output_format": {
+    "audit_type": "tidepool_infrastructure",
+    "timestamp": "ISO-8601",
+    "service_status": {
+      "tidepool_clio_service": "running|stopped|unknown",
+      "nats_server": "healthy|degraded|unhealthy",
+      "postgresql": "running|stopped|unknown"
+    },
+    "port_accessibility": {
+      "3000": "open|closed",
+      "3001": "open|closed",
+      "3002": "open|closed",
+      "3003": "open|closed",
+      "3004": "open|closed",
+      "3005": "open|closed"
+    },
+    "disk_usage": {
+      "path": "/home/artificium/dev/tidepool",
+      "used_gb": 0.0,
+      "available_gb": 0.0,
+      "percent_used": 0.0
+    },
+    "notes": "any observations or concerns"
+  },
+  
+  "constraints": {
+    "max_time_minutes": 5,
+    "output_format": "JSON only (no markdown, no prose)",
+    "return_method": "Write JSON to workspace file or respond via Telegram"
+  }
+}

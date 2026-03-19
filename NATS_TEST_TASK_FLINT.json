@@ -1,0 +1,53 @@
+{
+  "task_id": "test-flint-001",
+  "task_type": "infrastructure_audit",
+  "urgency": "low",
+  "timestamp": "2026-03-18T22:51:00Z",
+  "from": "clio",
+  "to": "flint",
+  
+  "subject": "TEST: aihome OpenClaw Infrastructure Status",
+  "description": "Quick audit of OpenClaw deployment on aihome. Return structured JSON with status.",
+  
+  "task": {
+    "action": "audit_openclaw_deployment",
+    "scope": "aihome local infrastructure",
+    "checks": [
+      "Is OpenClaw gateway running?",
+      "What is the workspace directory status?",
+      "What is current memory usage (free -h)?",
+      "What is current disk usage on /home/artificium/.openclaw/workspace?",
+      "Can we reach VPS (100.97.161.7) via Tailscale?"
+    ]
+  },
+  
+  "expected_output_format": {
+    "audit_type": "openclaw_infrastructure",
+    "timestamp": "ISO-8601",
+    "gateway_status": "running|stopped|unknown",
+    "workspace": {
+      "path": "/home/artificium/.openclaw/workspace",
+      "accessible": true,
+      "used_gb": 0.0,
+      "available_gb": 0.0,
+      "percent_used": 0.0
+    },
+    "system": {
+      "memory_free_gb": 0.0,
+      "memory_total_gb": 0.0,
+      "memory_percent_used": 0.0
+    },
+    "network": {
+      "vps_reachable": true,
+      "vps_ip": "100.97.161.7",
+      "connection_type": "tailscale|direct|unreachable"
+    },
+    "notes": "any observations or concerns"
+  },
+  
+  "constraints": {
+    "max_time_minutes": 5,
+    "output_format": "JSON only (no markdown, no prose)",
+    "return_method": "Write JSON to workspace file"
+  }
+}
