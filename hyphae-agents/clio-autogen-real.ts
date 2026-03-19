@@ -9,6 +9,7 @@
 import { HyphaeAgent, HyphaeAgentConfig } from "./agent-base";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { v4 as uuidv4 } from "uuid";
+import SecretsClient from "./secrets-client";
 
 interface Conversation {
   conversationId: string;
@@ -58,29 +59,49 @@ export class ClioAgentReal extends HyphaeAgent {
   async initialize(): Promise<void> {
     console.log("👑 Initializing Clio (AutoGen + Real Gemini)");
 
-    // Initialize Gemini
-    let apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
-    
-    // Fallback: read from environment file
-    if (!apiKey) {
-      try {
-        const fs = require('fs');
-        const home = process.env.HOME || '/home/artificium';
-        const bashrcPath = `${home}/.bashrc`;
-        if (fs.existsSync(bashrcPath)) {
-          const bashrc = fs.readFileSync(bashrcPath, 'utf8');
-          const match = bashrc.match(/export GEMINI_API_KEY="([^"]+)"/);
-          if (match) {
-            apiKey = match[1];
+    // Initialize Secrets Client
+    const secretsClient = new SecretsClient(
+      process.env.HYPHAE_URL || 'http://localhost:3100',
+      'clio'
+    );
+
+    // Wait for vault to be ready
+    const vaultReady = await secretsClient.waitForVault();
+    if (!vaultReady) {
+      console.warn('⚠️  Vault not ready, falling back to environment variables');
+      // Fallback: use env vars or bashrc
+      let apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        try {
+          const fs = require('fs');
+          const home = process.env.HOME || '/home/artificium';
+          const bashrcPath = `${home}/.bashrc`;
+          if (fs.existsSync(bashrcPath)) {
+            const bashrc = fs.readFileSync(bashrcPath, 'utf8');
+            const match = bashrc.match(/export GEMINI_API_KEY="([^"]+)"/);
+            if (match) {
+              apiKey = match[1];
+            }
           }
+        } catch (e) {
+          throw new Error("GOOGLE_API_KEY not available");
         }
-      } catch (e) {
-        // Fallback failed, will throw below
+      }
+    } else {
+      // Bootstrap secrets from vault
+      const bootstrapped = await secretsClient.bootstrap({
+        GOOGLE_API_KEY: 'gemini.api_key',
+      });
+
+      if (!bootstrapped) {
+        throw new Error("Failed to bootstrap required secrets from vault");
       }
     }
-    
+
+    // Initialize Gemini with loaded API key
+    const apiKey = process.env.GOOGLE_API_KEY;
     if (!apiKey) {
-      throw new Error("GOOGLE_API_KEY environment variable not set");
+      throw new Error("GOOGLE_API_KEY not available after bootstrap");
     }
 
     this.genAI = new GoogleGenerativeAI(apiKey);
