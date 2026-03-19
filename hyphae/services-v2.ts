@@ -7,6 +7,7 @@
  * - Service registration (agents declare capabilities)
  * - Service discovery (find agents by capability)
  * - Agent-to-agent RPC (framework-agnostic calling)
+ * - Clock synchronization (REQUIRED at registration)
  * - Audit logging (every call recorded)
  * - Multi-region federation (agents can be in different regions)
  */
@@ -14,6 +15,7 @@
 import Database from 'better-sqlite3';
 import axios from 'axios';
 import crypto from 'crypto';
+import { HyphaeTimekeeper, ClockSyncResponse } from './timekeeper';
 
 interface Capability {
   name: string;
@@ -37,6 +39,9 @@ interface ServiceRegistration {
   lastHeartbeat: number;
   status: 'healthy' | 'degraded' | 'unhealthy';
   capacity: number; // 0-1, how utilized
+  localTime?: number; // Agent's Date.now() at registration (for clock sync)
+  clockOffset?: number; // Hyphae time - agent time in milliseconds
+  lastClockSync?: number; // When was clock last synchronized?
 }
 
 interface RPCRequest {
@@ -60,14 +65,16 @@ interface RPCResponse {
 
 class HyphaeServiceRegistry {
   private db: Database.Database;
+  private timekeeper: HyphaeTimekeeper;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, timekeeper: HyphaeTimekeeper) {
     this.db = new Database(dbPath);
+    this.timekeeper = timekeeper;
     this.initSchema();
   }
 
   private initSchema() {
-    // Services table
+    // Services table (with clock synchronization)
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS hyphae_services (
         agent_id TEXT PRIMARY KEY,
@@ -83,12 +90,16 @@ class HyphaeServiceRegistry {
         registered_at INTEGER NOT NULL,
         last_heartbeat INTEGER NOT NULL,
         status TEXT NOT NULL DEFAULT 'healthy',
-        capacity REAL NOT NULL DEFAULT 0.5
+        capacity REAL NOT NULL DEFAULT 0.5,
+        clock_offset INTEGER DEFAULT 0,
+        last_clock_sync INTEGER,
+        clock_status TEXT DEFAULT 'unknown'
       );
       
       CREATE INDEX IF NOT EXISTS idx_hyphae_region ON hyphae_services(region);
       CREATE INDEX IF NOT EXISTS idx_hyphae_status ON hyphae_services(status);
       CREATE INDEX IF NOT EXISTS idx_hyphae_framework ON hyphae_services(framework);
+      CREATE INDEX IF NOT EXISTS idx_hyphae_clock_status ON hyphae_services(clock_status);
     `);
 
     // RPC audit trail table
@@ -125,15 +136,69 @@ class HyphaeServiceRegistry {
 
   /**
    * Register a new service (agent calling /services/register)
+   * REQUIRES clock synchronization as first step
    */
-  registerService(service: ServiceRegistration): { success: boolean; error?: string } {
+  registerService(service: ServiceRegistration): { success: boolean; clockSync?: ClockSyncResponse; error?: string } {
     try {
+      // STEP 1: Clock synchronization (REQUIRED)
+      if (!service.localTime) {
+        return {
+          success: false,
+          error: `REGISTRATION_FAILED: Missing required 'localTime' field.
+
+Registration requires clock synchronization for security and audit trail accuracy.
+
+Details:
+  - Field missing: localTime (your current Date.now())
+  
+REMEDIATION:
+  1. Include 'localTime: Date.now()' in registration request
+  2. Send POST to /services/register with:
+     {
+       agentId: "...",
+       name: "...",
+       localTime: Date.now(),  // <- REQUIRED
+       ...
+     }
+  3. Use returned 'offset' in all subsequent RPC calls
+  
+Example:
+  const response = await fetch('/services/register', {
+    method: 'POST',
+    body: JSON.stringify({
+      agentId: 'my-agent',
+      localTime: Date.now(),
+      ...
+    })
+  });
+  const offset = response.clockOffset;`,
+        };
+      }
+
+      // Synchronize clocks
+      const clockSyncResult = this.timekeeper.syncAgentClock({
+        agentId: service.agentId,
+        localTime: service.localTime,
+      });
+
+      if (clockSyncResult.status === 'error') {
+        return {
+          success: false,
+          clockSync: clockSyncResult,
+          error: clockSyncResult.message,
+        };
+      }
+
+      // STEP 2: Registration (now that clocks are synced)
+      const timePoint = this.timekeeper.now();
+
       const stmt = this.db.prepare(`
         INSERT OR REPLACE INTO hyphae_services (
           agent_id, name, framework, version, capabilities,
           endpoint, health_check_path, region, oauth_client_id,
-          auth_required, registered_at, last_heartbeat, status, capacity
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          auth_required, registered_at, last_heartbeat, status, capacity,
+          clock_offset, last_clock_sync, clock_status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       stmt.run(
@@ -147,15 +212,36 @@ class HyphaeServiceRegistry {
         service.region,
         service.oauthClientId,
         service.authRequired ? 1 : 0,
-        service.registeredAt,
-        service.lastHeartbeat,
+        timePoint.unix,
+        timePoint.unix,
         service.status,
-        service.capacity
+        service.capacity,
+        clockSyncResult.offset,
+        timePoint.unix,
+        'healthy'
       );
 
-      return { success: true };
+      return {
+        success: true,
+        clockSync: clockSyncResult,
+      };
     } catch (error) {
-      return { success: false, error: String(error) };
+      return {
+        success: false,
+        error: `REGISTRATION_FAILED: Internal error during registration.
+
+Error: ${String(error)}
+
+This may indicate:
+  - Database connection issue
+  - Invalid service data format
+  - Server-side problem
+
+ACTION:
+  1. Verify all required fields are present and valid
+  2. Retry registration after a few seconds
+  3. If persistent, contact Hyphae administrator`,
+      };
     }
   }
 
@@ -237,7 +323,7 @@ class HyphaeServiceRegistry {
   }
 
   /**
-   * Get details for specific service
+   * Get details for specific service (includes clock info)
    */
   getService(agentId: string): ServiceRegistration | null {
     const stmt = this.db.prepare('SELECT * FROM hyphae_services WHERE agent_id = ?');
@@ -260,29 +346,118 @@ class HyphaeServiceRegistry {
       lastHeartbeat: row.last_heartbeat,
       status: row.status,
       capacity: row.capacity,
+      clockOffset: row.clock_offset,
+      lastClockSync: row.last_clock_sync,
     };
+  }
+
+  /**
+   * Validate and update clock for a service during heartbeat
+   */
+  async validateAndUpdateServiceClock(agentId: string): Promise<{ updated: boolean; error?: string }> {
+    const service = this.getService(agentId);
+
+    if (!service) {
+      return { updated: false, error: `Service ${agentId} not found` };
+    }
+
+    try {
+      const metrics = await this.timekeeper.validateAgentClockSync(agentId, service.endpoint);
+
+      // Update service with latest clock metrics
+      const stmt = this.db.prepare(
+        `UPDATE hyphae_services 
+         SET clock_offset = ?, last_clock_sync = ?, clock_status = ? 
+         WHERE agent_id = ?`
+      );
+
+      stmt.run(metrics.averageOffset, metrics.lastValidation, metrics.status, agentId);
+
+      return { updated: true };
+    } catch (error) {
+      return {
+        updated: false,
+        error: `Clock validation failed for ${agentId}: ${String(error)}`,
+      };
+    }
   }
 
   /**
    * Agent-to-agent RPC call
    * Agent A calls: hyphae.call(targetAgent, capability, params)
+   * All RPC timestamps MUST come from timekeeper for accuracy
    */
   async call(
     sourceAgent: string,
     targetAgentId: string,
     capability: string,
     params: Record<string, any>,
-    options: { timeout?: number; region?: string; scope?: string } = {}
+    options: { timeout?: number; region?: string; scope?: string; timestamp?: number } = {}
   ): Promise<RPCResponse> {
     const traceId = crypto.randomUUID();
-    const timestamp = Date.now();
+    
+    // Use provided timestamp or get from timekeeper
+    // In production, timestamp should come from agent's corrected clock
+    const timePoint = this.timekeeper.now();
+    const timestamp = options.timestamp || timePoint.unix;
     const timeout = options.timeout || 30000;
 
     try {
+      // VALIDATION: Check source agent's clock hasn't drifted
+      const sourceService = this.getService(sourceAgent);
+      if (sourceService) {
+        const timestampValidation = this.timekeeper.validateTimestamp(timestamp, {
+          agentId: sourceAgent,
+          rpcId: traceId,
+        });
+
+        if (!timestampValidation.valid) {
+          const error = timestampValidation.error || 'Invalid timestamp';
+          console.error(`RPC REJECTED: ${error}`);
+          this.logAudit(
+            traceId,
+            sourceAgent,
+            targetAgentId,
+            capability,
+            false,
+            error,
+            0,
+            options.scope
+          );
+          return {
+            traceId,
+            success: false,
+            error: `TIMESTAMP_VALIDATION_FAILED: ${error}`,
+            duration: 0,
+            timestamp,
+          };
+        }
+      }
+
       // Discover target agent
       const targetService = this.getService(targetAgentId);
       if (!targetService) {
-        const error = `Service not found: ${targetAgentId}`;
+        const error = `SERVICE_NOT_FOUND: Agent '${targetAgentId}' not registered with Hyphae.
+
+Details:
+  - Requested agent:  ${targetAgentId}
+  - Time:             ${new Date(timestamp).toISOString()}
+  - Requester:        ${sourceAgent}
+  - Capability:       ${capability}
+
+POSSIBLE CAUSES:
+  1. Agent has not registered (startup delay?)
+  2. Agent name is incorrect
+  3. Agent deregistered or crashed
+  4. Agent is in a different region
+
+REMEDIATION:
+  1. Verify agent name matches exactly (case-sensitive)
+  2. Confirm agent is running and healthy
+  3. Check if agent is in expected region
+  4. Wait a few seconds (new agents have startup delay)
+  5. Retry discovery to get current service list`;
+
         this.logAudit(traceId, sourceAgent, targetAgentId, capability, false, error, 0, options.scope);
         return { traceId, success: false, error, duration: 0, timestamp };
       }
@@ -480,3 +655,4 @@ class HyphaeServiceRegistry {
 }
 
 export { HyphaeServiceRegistry, ServiceRegistration, Capability, RPCRequest, RPCResponse };
+export { HyphaeTimekeeper } from './timekeeper';
