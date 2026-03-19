@@ -7,7 +7,7 @@ const fs = require('fs');
 
 const app = express();
 const PORT = process.env.DASHBOARD_PORT || 3200;
-const HYPHAE_PROXY_URL = process.env.HYPHAE_PROXY_URL || 'http://localhost:3443';
+const HYPHAE_PROXY_URL = process.env.HYPHAE_PROXY_URL || 'http://localhost:8443';
 const HYPHAE_CORE_URL = process.env.HYPHAE_CORE_URL || 'http://localhost:3100';
 
 // Middleware
