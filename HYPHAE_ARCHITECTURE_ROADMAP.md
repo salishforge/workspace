@@ -8,18 +8,41 @@
 
 ## Phase Overview
 
-Three **completed** systems + **seven planned** phases to production excellence.
+**Minimal core** + **pluggable everything else** = AI operating system for organizations.
 
-### What's Built (Phase 0: Core)
-✅ Secrets Vault (encrypted storage)  
+### What's Built (Phase 0: Immutable Core)
+✅ Secrets Vault (encrypted storage interface)  
 ✅ Zero-Trust Registration (cryptographic identity)  
-✅ Universal Service API (provider gateway)
+✅ Universal Service API (provider gateway/router)
 
-### What's Next (Phases 0a-5)
+### What's Next (Phases 0c + 0a/0b + 1-5)
 
-**NEW: Phases 0a-0b** address the foundational layer John identified: **Agent Training & Customization System**
+**Architecture Principle:** Core is minimal and stable. Everything else is a replaceable plugin.
 
-This shifts Hyphae from middleware ("coordinates agents") to **platform** ("trains and aligns agents").
+**Phase 0c (NEW):** Plugin System
+- Plugin loader, lifecycle management, discovery
+- Extension point interfaces (TrainingProvider, MemoryBackend, ReasoningEngine, etc.)
+- Plugin development guide and templates
+- Permission system and sandboxing
+
+**Phases 0a-0b:** Built as default plugins (replaceable)
+- `hyphae-plugin-training-system` — Org/workgroup config injection
+- `hyphae-plugin-memory-postgresql` — Memory backend (can replace with Redis, MongoDB, etc.)
+- `hyphae-plugin-memory-scoping` — Scope-aware memory access
+
+**Phases 1-5:** Built as plugins (replaceable)
+- `hyphae-plugin-reasoning-react` — ReAct pattern (can replace with planning, tree-of-thoughts, etc.)
+- `hyphae-plugin-validation-behavioral` — Behavioral validation (can replace with custom validators)
+- `hyphae-plugin-prompts-versioned` — Prompt versioning (can extend or replace)
+- `hyphae-plugin-tools-builtin` — Tool registry (extensible)
+- Service connectors as plugins (1Password, AWS, Azure, PostgreSQL, Redis, etc.)
+
+**The Result:**
+- Core is unmaintained, never changes
+- Orgs customize via plugins, not source mods
+- Open source community builds plugins
+- Salish Forge sells premium plugins
+- Enterprise stability + ecosystem innovation
 
 ---
 
@@ -624,15 +647,22 @@ Returns results with audit trail
 
 ## Implementation Sequence
 
-### Month 1 (March 2026 - Now)
+### Week 1-2 (March 19-April 2)
 - [x] Phase 0: Core systems (Vault, Registration, Service API)
-- [ ] Phase 0a: Agent Training & Configuration System (Week 1-2)
-- [ ] Phase 0b: Memory Scoping System (Week 2-3)
+- [ ] **Phase 0c: Plugin Architecture** (2 weeks)
+  - Plugin loader & lifecycle
+  - Extension point interfaces
+  - Plugin development guide
+  - Permission system
 
-### Month 2 (April 2026)
-- [ ] Phase 1: ReAct reasoning framework (Week 1-2)
-- [ ] Phase 1: Prompts for Flint & Clio (Week 2-3)
-- [ ] Phase 1: Integration with training system (Week 3-4)
+### Week 3-4 (April 2-16)
+- [ ] Phase 0a: Training System Plugin (as `hyphae-plugin-training-system`)
+- [ ] Phase 0b: Memory Scoping Plugin (as `hyphae-plugin-memory-postgresql`)
+
+### Week 5-6 (April 16-30)
+- [ ] Phase 1: ReAct Plugin (as `hyphae-plugin-reasoning-react`)
+- [ ] Phase 1: Prompts Plugin (as `hyphae-plugin-prompts-versioned`)
+- [ ] Phase 1: Integration with training system
 
 ### Month 3 (May 2026)
 - [ ] Phase 2: Memory layer implementation (Week 1-2)
@@ -669,13 +699,41 @@ Returns results with audit trail
 │                    AGENTS                                     │
 │   Flint (CTO) | Clio (Chief of Staff) | Sub-Agents          │
 │                                                               │
-│  Phase 1: ReAct Reasoning Loop                               │
-│    Thought → Action → Observation → Reflection               │
+│  (Agents use plugins for: reasoning, validation, tools, etc.)│
 └────────────────────┬────────────────────────────────────────┘
                      │
                      ↓
 ┌───────────────────────────────────────────────────────────────┐
-│   PHASE 0a: AGENT TRAINING & CONFIGURATION SYSTEM (FOUNDATION)│
+│     PHASE 0c: PLUGIN SYSTEM (ARCHITECTURE FOUNDATION)         │
+│                                                               │
+│  Plugin Loader & Lifecycle Management                        │
+│  ├─ Discover plugins (Tier 1: core, Tier 2: default, Tier 3: custom)
+│  ├─ Load in dependency order                                 │
+│  ├─ Initialize with org config                              │
+│  └─ Route requests to correct plugin                        │
+│                                                               │
+│  Extension Point Interfaces:                                 │
+│  ├─ TrainingProvider (Tier 2: training-system)              │
+│  ├─ MemoryBackend (Tier 2: memory-postgresql, Tier 3: redis/mongo/etc.)
+│  ├─ ReasoningEngine (Tier 2: reasoning-react, Tier 3: planning/tree)
+│  ├─ ValidationProvider (Tier 2: validation-behavioral)       │
+│  ├─ ToolRegistry (Tier 2: tools-builtin)                    │
+│  ├─ PromptManager (Tier 2: prompts-versioned)               │
+│  ├─ ServiceConnectors (1Password, AWS, Azure, etc.)         │
+│  ├─ SubAgentFactory (Tier 2: standard, Tier 3: container/k8s)
+│  └─ WorkflowPlugins (approval, escalation, custom logic)    │
+│                                                               │
+│  Plugin Permissions & Sandboxing:                            │
+│  ├─ Memory access level (read/write/none)                   │
+│  ├─ Vault access level                                      │
+│  ├─ Network/filesystem access control                       │
+│  └─ Rate limiting per plugin                                │
+└───────────────┬──────────────────────────────────────────────┘
+                │
+                ↓
+┌───────────────────────────────────────────────────────────────┐
+│   PHASE 0a: AGENT TRAINING & CONFIGURATION PLUGIN             │
+│   (hyphae-plugin-training-system, but replaceable)            │
 │                                                               │
 │  Four-Level Config Merging:                                 │
 │  Global Defaults                                             │
@@ -717,40 +775,50 @@ Returns results with audit trail
 │           HYPHAE CORE ORCHESTRATOR                            │
 │                                                               │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │ Phase 1: ReAct Reasoning Framework                 │   │
+│  │ Phase 1: ReAct Reasoning Plugin                    │   │
+│  │  (hyphae-plugin-reasoning-react)                   │   │
 │  │  - Visible step-by-step thinking                   │   │
 │  │  - Real-time adaptation                            │   │
 │  │  - Decision tracing                                │   │
+│  │  - Replaceable with planning/tree-of-thoughts      │   │
 │  └─────────────────────────────────────────────────────┘   │
 │                     ↓                                        │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │ Phase 2: Persistent Memory Layer                   │   │
+│  │ Phase 2: Persistent Memory Plugins                 │   │
+│  │  (hyphae-plugin-memory-postgresql, replaceable)    │   │
 │  │  - Session memory (short-term)                     │   │
 │  │  - Long-term consolidation                         │   │
 │  │  - LangGraph checkpointing                          │   │
-│  │  - Integrated with Phase 0b scoping                │   │
+│  │  - Integrated with scoping                          │   │
+│  │  - Can replace with Redis/MongoDB/DynamoDB         │   │
 │  └─────────────────────────────────────────────────────┘   │
 │                     ↓                                        │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │ Phase 3: Behavioral Validation                     │   │
+│  │ Phase 3: Behavioral Validation Plugin              │   │
+│  │  (hyphae-plugin-validation-behavioral)             │   │
 │  │  - Requirements verification                       │   │
 │  │  - Test suite automation (50%+ coverage)           │   │
 │  │  - Org-specific validation rules applied           │   │
+│  │  - Extensible with custom validators               │   │
 │  └─────────────────────────────────────────────────────┘   │
 │                     ↓                                        │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │ Phase 4: Structured Prompt Engineering             │   │
+│  │ Phase 4: Prompt Engineering Plugins                │   │
+│  │  (hyphae-plugin-prompts-versioned)                 │   │
 │  │  - Versioned prompts                               │   │
 │  │  - Per-model variants                              │   │
 │  │  - Org-customized prompts injected                 │   │
+│  │  - Extensible with A/B testing, generation         │   │
 │  └─────────────────────────────────────────────────────┘   │
 │                     ↓                                        │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │ Phase 5: Tool Integration & Discovery              │   │
+│  │ Phase 5: Tool & Service Plugins                    │   │
+│  │  (hyphae-plugin-tools-builtin, connectors)         │   │
 │  │  - OpenAPI tool definitions                        │   │
 │  │  - Service discovery (agents query available)      │   │
 │  │  - Function calling                                │   │
-│  │  - Structured returns & error handling             │   │
+│  │  - Connectors: 1Pwd, AWS, Azure, PostgreSQL, Redis, etc.
+│  │  - Extensible with new tools/connectors            │   │
 │  └─────────────────────────────────────────────────────┘   │
 └───────────┬───────────┬───────────┬───────────┬─────────────┘
             │           │           │           │
@@ -765,6 +833,14 @@ Returns results with audit trail
 ---
 
 ## Success Metrics (All Phases)
+
+### Phase 0c: Plugin Architecture
+- ✓ Plugin loader successfully initializes all plugins in dependency order
+- ✓ Extension point interfaces stable and documented
+- ✓ Plugins can be enabled/disabled without core redeploy
+- ✓ Plugin permissions enforced (isolation works)
+- ✓ Default plugins work, can be replaced without modification
+- ✓ Community plugin template works (developer can build plugin from template)
 
 ### Phase 0a: Agent Training System
 - ✓ All agents receive merged training (global + org + workgroup + parent)
@@ -842,15 +918,41 @@ Returns results with audit trail
 
 ## Timeline to Production Excellence
 
-**Now (March 2026):** Phase 0 complete, roadmap defined, training system architected  
-**March-April 2026:** Phases 0a-0b (training & memory scoping foundation)  
-**April 2026:** Phase 1 (reasoning framework, integrated with training)  
-**May 2026:** Phase 2 (persistent memory with scoping)  
-**June 2026:** Phase 3 (behavioral validation with org rules)  
-**June-July 2026:** Phases 4-5 (structured prompts, tool integration)  
-**August 2026:** Full integration, optimization, security hardening  
-**September 2026:** Production ready, autonomous operation  
-**October 2026 onward:** Platform operations (different orgs using Hyphae differently)  
+**Now (March 19):** Phase 0 complete, architecture finalized, plugin strategy defined
+
+**Week 1-2 (March 19-April 2):** 
+- Phase 0c: Plugin System (loader, interfaces, permissions)
+- Plugin development guide & templates
+
+**Week 3-4 (April 2-16):**
+- Phase 0a: Training System Plugin (as `hyphae-plugin-training-system`)
+- Phase 0b: Memory Scoping Plugin (as `hyphae-plugin-memory-postgresql`)
+
+**Week 5-6 (April 16-30):**
+- Phase 1: Reasoning Plugin (as `hyphae-plugin-reasoning-react`)
+- Phase 1: Prompts Plugin (as `hyphae-plugin-prompts-versioned`)
+
+**June 2026:**
+- Phase 2: Memory plugins (including alternative backends for community)
+- Phase 3: Validation plugin
+
+**July 2026:**
+- Phase 5: Tool plugins and service connectors
+- Begin external testing with community developers
+
+**August 2026:**
+- Full integration testing
+- Security hardening
+- Performance optimization
+
+**September 2026:**
+- Production ready
+- Open source release OR commercial launch
+
+**October 2026 onward:**
+- Platform operations
+- Community plugin ecosystem grows
+- Organizations running Hyphae with custom plugins  
 
 ---
 
