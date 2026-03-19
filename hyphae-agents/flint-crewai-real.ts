@@ -60,7 +60,24 @@ export class FlintAgentReal extends HyphaeAgent {
     console.log("🔧 Initializing Flint (CrewAI + Real Gemini)");
 
     // Initialize Gemini
-    const apiKey = process.env.GOOGLE_API_KEY;
+    let apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+    
+    // Fallback: read from environment file
+    if (!apiKey) {
+      try {
+        const fs = require('fs');
+        const path = require('path');
+        const envPath = path.join(process.env.HOME || '~', '.bashrc');
+        const bashrc = fs.readFileSync(envPath, 'utf8');
+        const match = bashrc.match(/export GEMINI_API_KEY="([^"]+)"/);
+        if (match) {
+          apiKey = match[1];
+        }
+      } catch (e) {
+        // Fallback failed, will throw below
+      }
+    }
+    
     if (!apiKey) {
       throw new Error("GOOGLE_API_KEY environment variable not set");
     }
