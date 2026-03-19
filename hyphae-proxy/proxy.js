@@ -159,9 +159,23 @@ app.post('/api/rpc/call', validateToken, rateLimitMiddleware, async (req, res) =
     });
   }
 
+  // Agent endpoint mapping (bypass Hyphae Core for direct calls)
+  const agentEndpoints = {
+    'flint': 'http://localhost:3050/rpc',
+    'clio': 'http://localhost:3051/rpc',
+  };
+
+  const endpoint = agentEndpoints[targetAgent];
+  if (!endpoint) {
+    return res.status(404).json({
+      error: `Unknown agent: ${targetAgent}`,
+      traceId,
+    });
+  }
+
   try {
     const response = await axios.post(
-      `${INTERNAL_HYPHAE}/api/rpc/call`,
+      endpoint,
       {
         sourceAgent: userId,
         targetAgent,

@@ -24,8 +24,9 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: hyphae-core
+    network_mode: host
     environment:
-      DB_HOST: postgres
+      DB_HOST: 127.0.0.1
       DB_PORT: 5432
       DB_NAME: ${DB_NAME:-hyphae}
       DB_USER: ${DB_USER:-hyphae_user}
@@ -33,20 +34,16 @@ services:
       PORT: ${PORT:-3100}
       NODE_ENV: ${NODE_ENV:-production}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-    ports:
-      - "127.0.0.1:${PORT:-3100}:${PORT:-3100}"
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-3100}/api/health"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:${PORT:-3100}/api/health"]
       interval: 30s
       timeout: 3s
       retries: 3
       start_period: 5s
-    networks:
-      - hyphae
     volumes:
       - hyphae_logs:/var/log/hyphae
 
