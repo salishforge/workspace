@@ -8,14 +8,208 @@
 
 ## Phase Overview
 
-Three **completed** systems + **five planned** phases to production excellence.
+Three **completed** systems + **seven planned** phases to production excellence.
 
-### What's Built (Phase 0)
+### What's Built (Phase 0: Core)
 ✅ Secrets Vault (encrypted storage)  
 ✅ Zero-Trust Registration (cryptographic identity)  
 ✅ Universal Service API (provider gateway)
 
-### What's Next (Phases 1-5)
+### What's Next (Phases 0a-5)
+
+**NEW: Phases 0a-0b** address the foundational layer John identified: **Agent Training & Customization System**
+
+This shifts Hyphae from middleware ("coordinates agents") to **platform** ("trains and aligns agents").
+
+---
+
+## Phase 0a: Agent Training & Configuration System (Foundation)
+
+**Industry Standard:** Agent training infrastructure (Mem0, Bedrock, Foundry all include training layers)
+
+**Problem:** Agents don't know about Hyphae services. Every agent needs custom setup. Customizations aren't shareable.
+
+**Solution:** Inject training via prompt prefix + capability manifest + memory seeding. Four levels of config:
+
+```
+Global Hyphae Defaults
+    ↓ (inherited by)
+Organization Customizations
+    ↓ (inherited by)
+Workgroup Customizations
+    ↓ (inherited by)
+Sub-Agent Parent Overrides
+    ↓
+Final Merged Training Injected into Agent
+```
+
+**What Gets Configured:**
+
+1. **Global Defaults (Immutable)**
+   - Every agent learns: vault API, memory scopes, tool discovery, sub-agent spawning
+   - Standard error handling, escalation paths, audit logging
+
+2. **Organization Level** (Salish Forge config)
+   - Which models are allowed (Gemini, Claude, GPT)
+   - Audit requirements (log to which table?)
+   - Memory retention policies (global: 0 days/indefinite, workgroup: 90 days, etc.)
+   - Escalation teams (security → flint, budget → john)
+   - Custom validation rules (code review needs approval? test coverage minimum?)
+
+3. **Workgroup Level** (Hyphae Ops vs Platform vs other projects)
+   - Override org defaults for this project
+   - Project-specific constraints (token budget, concurrent tasks, etc.)
+   - Authorized services subset (this team can use vault, memory, tools; not deploy)
+   - Custom rules for this workgroup
+
+4. **Sub-Agent Level** (Parent agent configures children)
+   - Flint spawning task-processor-1: "You get 300s runtime, code_analyzer tool only, 7-day memory"
+   - Restricts child's capabilities while inheriting parent's org+workgroup config
+
+**Memory Scoping Model:**
+
+```
+Global Memory (all agents in org see this)
+├─ Organizational decisions
+└─ Approved patterns
+
+Workgroup Memory (workgroup agents only)
+├─ Project goals
+└─ Team agreements
+
+Agent-Local Memory (this agent only)
+├─ Session context
+└─ Working notes
+
+Sub-Stack Memory (parent + its children)
+├─ Parent decisions
+└─ Child outcomes
+```
+
+**Service Discovery (Agents Query What's Available):**
+
+```typescript
+// Every agent can do this
+const services = await hyphae.services.list();
+// Returns: vault, memory, tools, messaging, spawn
+
+const vaultDocs = await hyphae.services.docs('vault');
+// Returns: how to use vault, example calls, error codes
+
+const config = await hyphae.config.get();
+// Returns: my assigned model, escalation team, constraints, allowed services
+
+const capabilities = await hyphae.getCapabilities();
+// Returns: what operations I'm authorized to perform
+```
+
+**Files to Create:**
+- `hyphae/training-system.ts` — Config loading and merging
+- `hyphae/training-injector.ts` — Prompt prefix injection + manifest generation
+- `hyphae/memory-scoping.ts` — Scope-aware memory access
+- `schema-training.sql` — Config tables + audit log
+- `HYPHAE_AGENT_TRAINING_SYSTEM.md` — Complete design
+
+**RPC Endpoints:**
+- `training.getManifest(agentId)` — Get merged training for agent
+- `admin.updateOrgTraining(orgId, config)` — Update org-level training
+- `admin.updateWorkgroupTraining(workgroupId, config)` — Update workgroup training
+- `agent.configureChild(parentId, childId, overrides)` — Parent configures child
+- `services.list()` — Discover services
+- `services.docs(serviceName)` — Get service documentation
+- `memory.createWorkgroupScope(workgroupId, name)` — Create workgroup memory scope
+- `memory.createSubStackScope(parentId, children)` — Create sub-stack memory scope
+
+**Why This Matters:**
+
+Before (Hyphae as Middleware):
+- Each agent needs unique setup
+- Customizations stuck in prompts
+- Sub-agents don't inherit parent policies
+- No way to update config without redeploying
+
+After (Hyphae as Platform):
+- ✅ One org setup, all agents inherit
+- ✅ Different companies, same Hyphae platform, different behavior
+- ✅ Dynamic config updates (no redeploy needed)
+- ✅ Sub-agents automatically inherit+can override
+- ✅ Memory properly scoped (global vs workgroup vs sub-stack)
+
+**Key Insight:** This turns Hyphae from "agent coordination tool" into "AI operating system for organizations"
+
+---
+
+## Phase 0b: Memory Scoping System (Enhancement)
+
+**Problem:** Current memory model too simple for multi-level organizational use.
+
+**Solution:** Implement scope-aware memory with proper access control.
+
+**Memory Scope Levels:**
+
+```
+Global: All agents in organization
+├─ Published decisions
+├─ Organizational policies
+└─ Shared knowledge
+
+Workgroup: Agents within this project
+├─ Project-specific knowledge
+├─ Team agreements
+└─ Workgroup constraints
+
+Agent-Local: Private to this agent
+├─ Session context
+├─ Working notes
+└─ Temporary state
+
+Sub-Stack: Parent + its children only
+├─ Parent's child-relevant decisions
+├─ Child's outcomes
+└─ Inherited constraints
+```
+
+**Access Control:**
+
+```typescript
+// Store in workgroup memory (only workgroup agents see it)
+await hyphae.memory.store({
+  scope: 'workgroup',
+  workgroup_id: 'hyphae-ops',
+  key: 'sprint_goals',
+  value: { goals: [...] }
+});
+
+// Store in global memory (all agents see it)
+await hyphae.memory.store({
+  scope: 'global',
+  key: 'approved_architecture',
+  value: { pattern: 'hub_and_spoke' }
+});
+
+// Store in sub-stack (only parent + children see it)
+await subStackMemory.store({
+  key: 'task_progress',
+  value: { status: 'running' }
+});
+
+// Query with scope precedence (check specific scope first)
+const result = await hyphae.memory.query(question, {
+  scopes: ['agent_local', 'workgroup', 'global'] // Check in this order
+});
+```
+
+**Files to Create:**
+- `hyphae/memory-scoping.ts` — Scope-aware memory access
+- `schema-memory-scopes.sql` — Scope metadata tables
+- Enhanced memory endpoints with scope awareness
+
+**RPC Endpoints (Enhanced):**
+- `memory.store({scope, key, value})` — Store with scope
+- `memory.query(question, {scopes: [...]})` — Query with scope precedence
+- `memory.createWorkgroupScope(workgroupId, name)` — Create workgroup scope
+- `memory.createSubStackScope(parentId, children)` — Create sub-stack scope
+- `memory.getAccessibleScopes(agentId)` — What scopes can I see?
 
 ---
 
@@ -432,30 +626,35 @@ Returns results with audit trail
 
 ### Month 1 (March 2026 - Now)
 - [x] Phase 0: Core systems (Vault, Registration, Service API)
-- [ ] Phase 1: ReAct reasoning framework (Week 1-2)
-- [ ] Phase 1: Prompts for Flint & Clio (Week 2-3)
+- [ ] Phase 0a: Agent Training & Configuration System (Week 1-2)
+- [ ] Phase 0b: Memory Scoping System (Week 2-3)
 
 ### Month 2 (April 2026)
-- [ ] Phase 2: Memory layer implementation (Week 1-2)
-- [ ] Phase 2: Checkpointing engine (Week 2-3)
-- [ ] Phase 2: Integration tests (Week 3-4)
+- [ ] Phase 1: ReAct reasoning framework (Week 1-2)
+- [ ] Phase 1: Prompts for Flint & Clio (Week 2-3)
+- [ ] Phase 1: Integration with training system (Week 3-4)
 
 ### Month 3 (May 2026)
+- [ ] Phase 2: Memory layer implementation (Week 1-2)
+- [ ] Phase 2: Checkpointing engine (Week 2-3)
+- [ ] Phase 2: Integration with scoped memory (Week 3-4)
+
+### Month 4 (June 2026)
 - [ ] Phase 3: Behavioral validation framework (Week 1-2)
 - [ ] Phase 3: Requirements agent implementation (Week 2-3)
 - [ ] Phase 3: Test suite automation (Week 3-4)
 
-### Month 4 (June 2026)
+### Month 5 (July 2026)
 - [ ] Phase 4: Prompt engineering discipline (Week 1-2)
 - [ ] Phase 4: Prompt versioning system (Week 2-3)
 - [ ] Phase 4: Multi-model variants (Week 3-4)
 
-### Month 5 (July 2026)
+### Month 6 (August 2026)
 - [ ] Phase 5: Tool integration framework (Week 1-2)
 - [ ] Phase 5: Function calling infrastructure (Week 2-3)
 - [ ] Phase 5: Tool registry & discovery (Week 3-4)
 
-### Month 6 (August 2026)
+### Month 7 (September 2026)
 - [ ] Integration testing across all phases
 - [ ] Performance optimization
 - [ ] Security hardening
@@ -466,46 +665,94 @@ Returns results with audit trail
 ## Architecture Diagram (All Phases)
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    AGENTS                               │
-│   Flint (CTO) | Clio (Chief of Staff) | Sub-Agents    │
-│                                                         │
-│  Phase 1: ReAct Reasoning Loop                         │
-│    Thought → Action → Observation → Reflection         │
-└────────────────────┬────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│                    AGENTS                                     │
+│   Flint (CTO) | Clio (Chief of Staff) | Sub-Agents          │
+│                                                               │
+│  Phase 1: ReAct Reasoning Loop                               │
+│    Thought → Action → Observation → Reflection               │
+└────────────────────┬────────────────────────────────────────┘
                      │
                      ↓
-┌─────────────────────────────────────────────────────────┐
-│           HYPHAE CORE ORCHESTRATOR                      │
-│                                                         │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │ Phase 2: Persistent Memory Layer               │   │
-│  │  - Session memory (short-term)                 │   │
-│  │  - Long-term consolidation                     │   │
-│  │  - LangGraph checkpointing                      │   │
-│  └─────────────────────────────────────────────────┘   │
-│                     ↓                                    │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │ Phase 3: Behavioral Validation                 │   │
-│  │  - Requirements verification                   │   │
-│  │  - Test suite automation (50%+ coverage)       │   │
-│  │  - Outcome validation                          │   │
-│  └─────────────────────────────────────────────────┘   │
-│                     ↓                                    │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │ Phase 4: Structured Prompt Engineering         │   │
-│  │  - Versioned prompts                           │   │
-│  │  - Per-model variants                          │   │
-│  │  - Role/capabilities/constraints               │   │
-│  └─────────────────────────────────────────────────┘   │
-│                     ↓                                    │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │ Phase 5: Tool Integration                      │   │
-│  │  - OpenAPI tool definitions                    │   │
-│  │  - Function calling                            │   │
-│  │  - Structured returns & error handling         │   │
-│  └─────────────────────────────────────────────────┘   │
-└───────────┬───────────┬───────────┬───────────┬─────────┘
+┌───────────────────────────────────────────────────────────────┐
+│   PHASE 0a: AGENT TRAINING & CONFIGURATION SYSTEM (FOUNDATION)│
+│                                                               │
+│  Four-Level Config Merging:                                 │
+│  Global Defaults                                             │
+│     ↓ (inherited by)                                        │
+│  Organization Config (Salish Forge)                         │
+│     ↓ (inherited by)                                        │
+│  Workgroup Config (Hyphae Ops vs Platform, etc.)            │
+│     ↓ (inherited by)                                        │
+│  Sub-Agent Parent Overrides                                 │
+│     ↓                                                        │
+│  Final Merged Training Injected into Agent                  │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ What Gets Trained:                                  │   │
+│  │ - Service discovery (vault, memory, tools, etc.)   │   │
+│  │ - Memory scoping rules (global vs workgroup)       │   │
+│  │ - Escalation paths                                 │   │
+│  │ - Validation rules (org-specific)                  │   │
+│  │ - Allowed tools/services                           │   │
+│  │ - Runtime constraints (token budget, etc.)         │   │
+│  └─────────────────────────────────────────────────────┘   │
+└───────────────────┬──────────────────────────────────────────┘
+                    │
+                    ↓
+┌───────────────────────────────────────────────────────────────┐
+│    PHASE 0b: MEMORY SCOPING SYSTEM                            │
+│                                                               │
+│  Scope Levels:                                               │
+│  - Global Memory (all agents see)                            │
+│  - Workgroup Memory (workgroup agents only)                  │
+│  - Agent-Local Memory (this agent only)                      │
+│  - Sub-Stack Memory (parent + children only)                 │
+│                                                               │
+│  Scope-aware access control & retrieval                      │
+└───────────────────┬──────────────────────────────────────────┘
+                    │
+                    ↓
+┌───────────────────────────────────────────────────────────────┐
+│           HYPHAE CORE ORCHESTRATOR                            │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ Phase 1: ReAct Reasoning Framework                 │   │
+│  │  - Visible step-by-step thinking                   │   │
+│  │  - Real-time adaptation                            │   │
+│  │  - Decision tracing                                │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                     ↓                                        │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ Phase 2: Persistent Memory Layer                   │   │
+│  │  - Session memory (short-term)                     │   │
+│  │  - Long-term consolidation                         │   │
+│  │  - LangGraph checkpointing                          │   │
+│  │  - Integrated with Phase 0b scoping                │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                     ↓                                        │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ Phase 3: Behavioral Validation                     │   │
+│  │  - Requirements verification                       │   │
+│  │  - Test suite automation (50%+ coverage)           │   │
+│  │  - Org-specific validation rules applied           │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                     ↓                                        │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ Phase 4: Structured Prompt Engineering             │   │
+│  │  - Versioned prompts                               │   │
+│  │  - Per-model variants                              │   │
+│  │  - Org-customized prompts injected                 │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                     ↓                                        │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ Phase 5: Tool Integration & Discovery              │   │
+│  │  - OpenAPI tool definitions                        │   │
+│  │  - Service discovery (agents query available)      │   │
+│  │  - Function calling                                │   │
+│  │  - Structured returns & error handling             │   │
+│  └─────────────────────────────────────────────────────┘   │
+└───────────┬───────────┬───────────┬───────────┬─────────────┘
             │           │           │           │
             ↓           ↓           ↓           ↓
     ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
@@ -518,6 +765,19 @@ Returns results with audit trail
 ---
 
 ## Success Metrics (All Phases)
+
+### Phase 0a: Agent Training System
+- ✓ All agents receive merged training (global + org + workgroup + parent)
+- ✓ Service discovery works (agents can query available services)
+- ✓ Training updates work without redeploying agents
+- ✓ Sub-agents inherit parent + org + workgroup config
+- ✓ Org-level customizations apply to all agents automatically
+
+### Phase 0b: Memory Scoping
+- ✓ Four scope levels working (global, workgroup, agent-local, sub-stack)
+- ✓ Access control enforced (agents only see authorized scopes)
+- ✓ Scope precedence works (check agent-local before workgroup before global)
+- ✓ Sub-stack memory isolated (only parent + children can access)
 
 ### Phase 1: ReAct Reasoning
 - ✓ All agent decisions traced to specific thoughts
@@ -582,11 +842,15 @@ Returns results with audit trail
 
 ## Timeline to Production Excellence
 
-**Now (March 2026):** Phase 0 complete, roadmap defined  
-**April-May 2026:** Phases 1-3 (reasoning, memory, validation)  
-**June 2026:** Phases 4-5 (prompts, tools)  
-**August 2026:** Full integration, optimization, deployment  
+**Now (March 2026):** Phase 0 complete, roadmap defined, training system architected  
+**March-April 2026:** Phases 0a-0b (training & memory scoping foundation)  
+**April 2026:** Phase 1 (reasoning framework, integrated with training)  
+**May 2026:** Phase 2 (persistent memory with scoping)  
+**June 2026:** Phase 3 (behavioral validation with org rules)  
+**June-July 2026:** Phases 4-5 (structured prompts, tool integration)  
+**August 2026:** Full integration, optimization, security hardening  
 **September 2026:** Production ready, autonomous operation  
+**October 2026 onward:** Platform operations (different orgs using Hyphae differently)  
 
 ---
 
