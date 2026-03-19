@@ -309,13 +309,13 @@ app.post("/auth/token", express.json(), (req: Request, res: Response) => {
   }
 
   // Validate API key (in production: lookup from database)
-  const validApiKeys: Record<string, string> = {
-    "john-broker": "key-" + process.env.JOHN_API_KEY || "default",
-  };
-
-  if (validApiKeys[userId] !== apiKey) {
+  // Check against environment variable set in ~/.bashrc
+  const validApiKey = process.env.VALID_API_KEY || process.env.JOHN_API_KEY || "default-key";
+  
+  if (apiKey !== validApiKey) {
     return res.status(401).json({
       error: "Invalid credentials",
+      details: "API key does not match configured key",
     });
   }
 
