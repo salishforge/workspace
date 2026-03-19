@@ -461,18 +461,26 @@ No environment variables needed:
   ✓ Only in ~/.hyphae-keys (encrypted on disk)
 ```
 
-## Performance
+## Performance Requirements
 
-- **Challenge generation:** <100ms
-- **Signature creation (Ed25519):** <200ms
-- **Signature verification:** <200ms
-- **Key grant issuance:** <500ms
-- **Total registration flow:** 1-5 seconds
+**Performance must be measured in your actual deployment environment.**
+
+Variables that affect real-world performance:
+- **Cryptographic operations:** Depends on hardware (CPU, crypto acceleration)
+- **Database operations:** Depends on disk, indexing, concurrent load
+- **Network latency:** Depends on infrastructure between components
+- **Approval polling:** Depends on configured poll interval (5s default is tunable)
+
+**Do not assume the "typical" timings.** Test your actual deployment with:
+- Real hardware and database
+- Expected agent concurrency
+- Your network topology
+- Production-like secret volumes
 
 For primary agents waiting for approval:
-- **First poll:** Immediate (in background)
-- **Subsequent polls:** Every 5 seconds (configurable)
-- **Timeout:** 5 minutes (configurable)
+- **First poll:** Background (configurable)
+- **Subsequent polls:** Every 5 seconds (configurable interval)
+- **Approval timeout:** 5 minutes (configurable)
 
 ## Environment Variables
 

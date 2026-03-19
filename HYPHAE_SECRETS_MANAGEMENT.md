@@ -257,13 +257,16 @@ setInterval(async () => {
 
 ## Performance Metrics
 
-| Operation | Latency | Notes |
-|-----------|---------|-------|
-| Vault get (cached) | <50ms | Memory cache hit |
-| Vault get (miss) | 100-500ms | PostgreSQL query + decryption |
-| Vault set | 200-800ms | Encrypt + PostgreSQL write |
-| Vault list | 300-1000ms | PostgreSQL query + decrypt multiple |
-| Cache lookup | <10ms | Hash map lookup |
+**Performance characteristics must be measured in your actual deployment, not assumed from these estimates.**
+
+Required measurements before production:
+- Cache hit latency (measure with instrumentation)
+- Database query times (depends on: data size, indexing, load)
+- Encryption/decryption overhead (depends on: secret size, hardware)
+- PostgreSQL write latency (depends on: disk, synchronous settings)
+- Concurrent request behavior (depends on: connection pool size)
+
+Measure these under real load before making SLA commitments.
 
 ## Encryption at Rest
 

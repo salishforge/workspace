@@ -505,20 +505,40 @@ Hyphae caches results per route:
 // Cache auto-expires after TTL
 ```
 
-## Performance
+## Performance Requirements
 
-| Operation | Latency | Notes |
-|-----------|---------|-------|
-| Cache hit | <50ms | Hash lookup + return |
-| Core vault access | 100-500ms | PostgreSQL + decryption |
-| External service | 300-2000ms | Depends on backend (network, auth) |
-| Gateway overhead | 10-50ms | Verification, routing, logging |
-| Fallback attempt | +300-2000ms | Per fallback tried |
+**IMPORTANT: Performance metrics must be derived from actual measured test data, not projections or estimates.**
 
-**Optimization:**
-- Caching dramatically reduces database round-trips
-- Retry policy with exponential backoff prevents cascade failures
-- Parallel fallback attempts (future optimization)
+Required load testing before production:
+
+1. **Baseline Measurements**
+   - Single request latency (p50, p95, p99)
+   - Throughput (requests/sec per agent)
+   - Cache hit rate vs miss rate impact
+   - Database query times (simple vs complex)
+   - Encryption/decryption overhead
+
+2. **Load Testing Scenarios**
+   - Concurrent requests (1, 10, 100, 1000 agents)
+   - Cache performance degradation under load
+   - Fallback behavior with real latencies
+   - External service timeout handling
+   - Database connection pool exhaustion
+
+3. **Real-World Conditions**
+   - Database under production load (disk I/O, lock contention)
+   - External services with realistic latencies (100ms-5s)
+   - Network conditions (jitter, packet loss, latency spikes)
+   - Secret sizes (bytes to MB)
+   - Concurrent fallback attempts
+
+**Do not assume performance.** Measure actual system behavior before:
+- Making SLA commitments
+- Sizing infrastructure resources
+- Setting timeout values
+- Planning cache TTLs
+- Designing fallback strategies
+- Committing to deployment schedules
 
 ## Error Handling
 
