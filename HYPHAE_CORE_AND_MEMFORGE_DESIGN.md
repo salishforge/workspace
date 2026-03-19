@@ -1,8 +1,24 @@
-# Hyphae Core + Memforge: Resilient Multi-Agent Platform Design
+# Hyphae Core + MemForge: Resilient Multi-Agent Platform Design
 
-**Status:** Comprehensive architecture rethink based on real-world failure modes  
+**Status:** Comprehensive architecture integrating actual MemForge implementation  
+**MemForge Location:** `/home/artificium/.openclaw/workspace/nanoclaw-fork/memforge/`  
+**MemForge Status:** Functional implementation (ingest, consolidation, retrieval complete)  
 **Research:** Multi-agent consistency problems, memory failures, circuit breaker patterns, graceful degradation  
 **Date:** March 19, 2026
+
+---
+
+## Critical Update
+
+This document was initially a theoretical design. Upon research, we discovered **Flint, Clio, and John already designed and built MemForge** with:
+- Tiered memory (hot/warm/cold with temporal branching)
+- Sleep-cycle consolidation (neuroscience-inspired, 9 steps)
+- Years-long institutional memory (not days)
+- Role-based filtering for multi-agent systems
+
+**This design now references the actual MemForge implementation**, not a generic memory layer.
+
+See **MEMFORGE_VS_SOLUTIONS.md** for detailed comparison with Mem0, Bedrock, and other industry solutions.
 
 ---
 
@@ -228,92 +244,249 @@ Hyphae Core starts:
 
 ---
 
-## Memforge: The Persistence Tier
+## MemForge: The Persistence Tier (Actual Implementation)
 
-**Separate from Hyphae Core.** Can be replaced. Can fail. Gracefully.
+**Separate from Hyphae Core.** Production implementation in `/nanoclaw-fork/memforge/`.  
+Can be replaced. Can fail. Gracefully.
 
-### The Hybrid Memory Model
+### The Tiered Memory Model (Years-Long, Not Days)
 
-**L1 Cache: Agent-Local Memory**
+**HOT TIER (Working Memory, ~3K tokens)**
 ```
-Private to each agent:
-  - Current task context
-  - Working notes
-  - Recent decisions
-  - Session state
+Loaded every session:
+  - Agent identity and core values
+  - Current priorities
+  - Active context
+  - Critical guardrails
 
-Stored: In-agent (on agent's hardware)
-Access: Only by that agent
-Durability: Lost when agent stops
-Consistency: Always consistent (only reader/writer)
-Fallback: None (this is temporary working memory)
-```
-
-**L2 Cache: Workgroup Memory**
-```
-Shared within a team/workgroup:
-  - Project goals
-  - Team decisions
-  - Approved patterns
-  - Resource allocations
-
-Stored: Memforge (in-memory cache layer)
-Access: All agents in workgroup
-Durability: Survives agent restarts (persisted to L3)
-Consistency: Eventually consistent
-Staleness: Up to 30 seconds behind L3
-Fallback: Serve cached version if Memforge unavailable
+Stored: In-memory, generated fresh each session
+Access: Loaded from MemForge hot_tier table
+Durability: Regenerated nightly from consolidation
+Consistency: Fresh (updated after sleep cycle)
+Source: MemForge distillation (Step 8 of consolidation)
 ```
 
-**L3: Persistent Storage (Authoritative Source)**
+**EPISODIC BUFFER (Append-Only Event Log)**
 ```
-Durable knowledge:
-  - Organization decisions
-  - Historical context
-  - Learned constraints
-  - Versioned configurations
+Recorded during waking hours:
+  - All tool calls
+  - All decisions
+  - All learnings
+  - All observations
 
-Stored: Memforge backend (PostgreSQL, Redis, MongoDB, etc.)
-Access: Via Memforge API (with role filtering)
-Durability: Survives service restarts
-Consistency: Strong consistency (writes wait for confirmation)
-Staleness: None (this is the source of truth)
-Fallback: If L3 unreachable, agents use L2 cache
+Stored: MemForge episodic_buffer table
+Access: Append-only (no modifications)
+Durability: Persists during entire session
+Consistency: Immutable (ordered by timestamp)
+Clearing: After sleep cycle → moved to cold_archive
+Purpose: Raw material for consolidation
 ```
+
+**VECTOR STORE (Semantic Memory)**
+```
+Embeddings of consolidated concepts:
+  - Semantic similarity search
+  - Embedding-based triggering
+  - Cost-controlled (local Ollama or API)
+
+Stored: PostgreSQL pgvector extension
+Access: Via memory_retrieval.js (hybrid search)
+Durability: Persists across sessions
+Consistency: Updated during consolidation (Step 7)
+Fallback: Keyword search (pg_trgm) if vector unavailable
+Performance: <50ms lookup, >90% recall
+```
+
+**GRAPH STORE (Associative Memory, Temporal Branching)**
+```
+Nodes = entities/concepts
+Edges = relationships with temporal bounds
+
+Key Innovation: Temporal Branching
+  - When belief changes: valid_until old edge, add new edge
+  - Never delete (history preserved)
+  - Query "what did you believe on date X?" is answerable
+  - Query "when did you change mind about X?" is answerable
+
+Stored: PostgreSQL Apache AGE or adjacency tables
+Access: Graph traversal (1-2 hops enrichment)
+Durability: Permanent (never deleted)
+Consistency: Updated during consolidation (Step 6)
+Example: Agent believes X, changes to NOT_X on date Y
+  - Both beliefs stored with temporal bounds
+  - Causality preserved (what changed and when)
+```
+
+**TEMPORAL LOG (Causal Sequencing)**
+```
+Ordered sequence of significant events:
+  - What happened when
+  - Causality relationships
+  - Decision sequence analysis
+
+Stored: MemForge temporal_log table
+Access: Time-series queries, "what led to X?" traversal
+Durability: Complete history
+Consistency: Immutable once written
+Purpose: Answer "what sequence of events caused this decision?"
+```
+
+**COLD ARCHIVE (Forever Preservation)**
+```
+All raw episodic records preserved:
+  - Never deleted (only archived)
+  - Indexed for rare deep-dive queries
+  - Complete audit trail
+
+Stored: MemForge cold_archive table
+Access: Full-text search (rare queries only)
+Durability: Permanent, immutable
+Consistency: Write-once (moved from episodic_buffer)
+Purpose: Historical audit trail, compliance, investigation
+Timeline: Episodic → Archive after each sleep cycle
+```
+
+### MemForge Consolidation: The Nine-Step Sleep Cycle
+
+**Runs nightly (02:00 UTC default). Neuroscience-inspired consolidation.**
+
+Each step is a separate LLM call (controlled budget, different models per step).
+
+```
+EPISODIC BUFFER (today's raw events)
+         │
+         ▼
+[CONSOLIDATION AGENT - 9 STEPS]
+
+Step 1: ENTITY EXTRACTION
+   Input: All events from today
+   Output: List of entities (who/what appeared?)
+   Model: Claude Haiku (fast, cheap)
+   Tokens: ~100
+
+Step 2: RELATIONSHIP INFERENCE
+   Input: Entities from Step 1
+   Output: How are they connected?
+   Model: Claude Haiku
+   Tokens: ~150
+
+Step 3: CONTRADICTION DETECTION
+   Input: Inferred relationships
+   Output: Any conflicts with existing graph?
+   Model: Claude Haiku
+   Tokens: ~100
+
+Step 4: TEMPORAL SEQUENCING
+   Input: Events + contradictions
+   Output: Ordered causality sequence
+   Model: Claude Haiku
+   Tokens: ~120
+
+Step 5: IMPORTANCE SCORING
+   Input: All events, their significance
+   Output: Hot/warm/cold tier routing decisions
+   Model: Claude Haiku
+   Tokens: ~100
+
+Step 6: GRAPH UPDATE
+   Input: Entities, relationships, importance
+   Action: Create/update nodes and edges
+   Temporal Branching: Close old edges, open new ones (if contradictions)
+   Storage: Apache AGE or adjacency tables
+   Result: Permanent knowledge graph with history
+
+Step 7: VECTOR UPDATE
+   Input: Consolidated concepts
+   Action: Embed with pgvector
+   Model: Local Ollama (nomic-embed-text) or API
+   Storage: MemForge vector_store (pgvector)
+   Result: Semantic searchable memory
+
+Step 8: HOT TIER DISTILLATION
+   Input: Entire knowledge graph
+   Output: Compressed 3K-token working memory for next session
+   Model: Claude Haiku
+   Tokens: ~150
+   Storage: MemForge hot_tier table
+   Also generates: CLAUDE.md (for SDK/session startup)
+
+Step 9: ARCHIVE EPISODIC BUFFER
+   Action: Move raw episodic_buffer → cold_archive
+   Action: Clear episodic_buffer for next session
+   Result: Fresh buffer ready for tomorrow
+
+CONSOLIDATED MEMORY (ready for next session)
+```
+
+**Budget Control:**
+- Max tokens per consolidation: Configurable (default: 2000)
+- Budget exceeded? Stop consolidation, retry tomorrow
+- Cost tracking: Per-step token accounting
+- Average cost: ~$0.10/night (Claude Haiku pricing)
+
+**Failure Handling:**
+- Step fails? Skip it, continue to next
+- Partial consolidation still improves memory
+- Full retry next night if budget exceeded
+- No "all or nothing" semantics
+
+**Timeline:**
+```
+18:00 - Agent ends work, episodic buffer full
+02:00 - Sleep cycle begins
+02:01 - Step 1-5: Analysis (~500 tokens)
+02:10 - Step 6: Graph update (~0 tokens, just DB writes)
+02:11 - Step 7: Vector embedding (~200 tokens)
+02:15 - Step 8: Hot tier distillation (~150 tokens)
+02:20 - Step 9: Archive buffer (~0 tokens)
+02:20 - Done. Hot tier ready for 06:00 agent startup.
+```
+
+---
 
 ### Role-Based Memory Filtering
 
 **Not all agents see all memory.**
 
 ```
-Agent Flint:
-  - Sees: Global memory, workgroup memory (hyphae-ops), agent-local
-  - Doesn't see: Workgroup memory (platform team)
+Agent Flint (CTO):
+  - Sees: All organizational memory (full audit trail)
+  - Sees: All decisions, approvals, security alerts
+  - Sees: Sub-agent memories (as parent)
 
-Agent Clio:
-  - Sees: Global memory, workgroup memory (clio-team), agent-local
-  - Doesn't see: Workgroup memory (engineering), workgroup memory (platform)
+Agent Clio (Chief of Staff):
+  - Sees: Organizational memory (strategy level)
+  - Sees: Coordination logs
+  - Doesn't see: Engineering details, code reviews
 
 Sub-Agent worker-1 (spawned by Flint):
-  - Sees: Flint's view + sub-stack memory (Flint + children)
+  - Sees: Only task-specific context
+  - Sees: Flint's shared knowledge (parent's filtered view)
   - Doesn't see: Other agents' memories
+  - Doesn't see: Organizational audit trail
 
-System Memory (logged decisions, approvals):
-  - Visible to agents with "audit" role
-  - Visible to Flint (CTO, has audit role)
-  - Not visible to regular sub-agents
+Sub-Sub-Agent debugger-1 (spawned by worker-1):
+  - Sees: Only task sub-context
+  - Sees: Parent's (worker-1) filtered view
+  - Doesn't see: Anything else
 ```
 
 **Enforced at every access:**
 ```
-Agent: "Get memory: project deadline"
-Memforge:
-  1. Verify agent identity
-  2. Check agent's roles
-  3. Filter memory by role
+Agent: "Query: What are our code review standards?"
+MemForge:
+  1. Verify agent identity + encryption key
+  2. Check agent's roles (cto? engineer? worker?)
+  3. Query graph/vector store with role filter
   4. Return only authorized items
-  5. Log access (who accessed what memory)
+  5. Log access: WHO accessed WHAT MEMORY from WHERE
+  6. Return results with source transparency
 ```
+
+**Implementation (Actual MemForge):**
+- See `memory_retrieval.js` line ~150: `queryByText(agentId, roles=[])`
+- Role filtering applied at SQL level (not post-fetch)
+- Results include role_filtered flag (transparency)
 
 ### Consistency Guarantees
 
