@@ -485,7 +485,7 @@ app.post("/api/rpc/call", async (req: Request, res: Response) => {
         ),
       ]) as Response;
 
-      const responseData = await response.json();
+      const responseData = await response.json() as any;
       callSuccess = responseData.success !== false;
       callResult = responseData;
 
