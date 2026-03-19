@@ -507,15 +507,18 @@ Hyphae caches results per route:
 
 ## Performance
 
-- **Cache hit:** <5ms
-- **Core vault access:** 10-50ms
-- **External service access:** 100-500ms (depends on backend)
-- **Fallback attempt:** Additional latency per fallback
+| Operation | Latency | Notes |
+|-----------|---------|-------|
+| Cache hit | <50ms | Hash lookup + return |
+| Core vault access | 100-500ms | PostgreSQL + decryption |
+| External service | 300-2000ms | Depends on backend (network, auth) |
+| Gateway overhead | 10-50ms | Verification, routing, logging |
+| Fallback attempt | +300-2000ms | Per fallback tried |
 
 **Optimization:**
-- Caching reduces external service calls
-- Retry policy absorbs transient failures
-- Parallel fallback attempts (coming soon)
+- Caching dramatically reduces database round-trips
+- Retry policy with exponential backoff prevents cascade failures
+- Parallel fallback attempts (future optimization)
 
 ## Error Handling
 

@@ -463,11 +463,11 @@ No environment variables needed:
 
 ## Performance
 
-- **Challenge generation:** <1ms
-- **Signature creation (Ed25519):** <2ms
-- **Signature verification:** <2ms
-- **Key grant issuance:** <5ms
-- **Total registration flow:** 10-50ms
+- **Challenge generation:** <100ms
+- **Signature creation (Ed25519):** <200ms
+- **Signature verification:** <200ms
+- **Key grant issuance:** <500ms
+- **Total registration flow:** 1-5 seconds
 
 For primary agents waiting for approval:
 - **First poll:** Immediate (in background)

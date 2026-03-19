@@ -255,6 +255,16 @@ setInterval(async () => {
 // - FROM WHICH IP address
 ```
 
+## Performance Metrics
+
+| Operation | Latency | Notes |
+|-----------|---------|-------|
+| Vault get (cached) | <50ms | Memory cache hit |
+| Vault get (miss) | 100-500ms | PostgreSQL query + decryption |
+| Vault set | 200-800ms | Encrypt + PostgreSQL write |
+| Vault list | 300-1000ms | PostgreSQL query + decrypt multiple |
+| Cache lookup | <10ms | Hash map lookup |
+
 ## Encryption at Rest
 
 ```typescript

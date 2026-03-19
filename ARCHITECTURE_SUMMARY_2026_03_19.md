@@ -182,12 +182,12 @@ Complete infrastructure delivered in three major systems.
 
 | Operation | Latency | Notes |
 |-----------|---------|-------|
-| Registration (sub-agent) | <100ms | Immediate auto-approval |
+| Registration (sub-agent) | 1-5s | Immediate auto-approval |
 | Registration (primary) | 5 min | Waiting for human |
-| Vault get (cached) | <5ms | Memory cache hit |
-| Vault get (cache miss) | 10-50ms | Core vault access |
-| External service call | 100-500ms | Depends on service |
-| Fallback attempt | +100-500ms | Per fallback tried |
+| Vault get (cached) | <50ms | Memory cache hit |
+| Vault get (cache miss) | 100-500ms | PostgreSQL + decrypt |
+| External service call | 300-2000ms | Depends on backend |
+| Fallback attempt | +300-2000ms | Per fallback tried |
 
 ## Key Design Decisions
 

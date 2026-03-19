@@ -325,21 +325,23 @@ Together they enable:
 - Provider independence
 - Zero environment variable secrets
 
-## Time Breakdown
+## Time Breakdown (Realistic Estimates)
 
 | Task | Duration |
 |------|----------|
-| Secrets Vault design | 45 min |
-| Vault implementation | 90 min |
-| Vault documentation | 60 min |
-| Registration design | 45 min |
-| Registration implementation | 90 min |
-| Registration documentation | 45 min |
-| Service API design | 30 min |
-| Service API implementation | 60 min |
-| Service API documentation | 45 min |
-| Memory recording | 30 min |
-| **Total** | **~6 hours** |
+| Secrets Vault design | 2-3 hours |
+| Vault implementation | 4-6 hours |
+| Vault documentation | 2-3 hours |
+| Registration design | 1-2 hours |
+| Registration implementation | 4-6 hours |
+| Registration documentation | 1-2 hours |
+| Service API design | 1-2 hours |
+| Service API implementation | 3-5 hours |
+| Service API documentation | 2-3 hours |
+| Memory recording | 1 hour |
+| **Total** | **~25-40 hours** |
+
+(Initial estimate of "6 hours" was optimistic by ~5x)
 
 ## Decision Made By
 
