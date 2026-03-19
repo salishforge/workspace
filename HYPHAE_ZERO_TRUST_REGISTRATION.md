@@ -461,26 +461,57 @@ No environment variables needed:
   ✓ Only in ~/.hyphae-keys (encrypted on disk)
 ```
 
-## Performance Requirements
+## Performance Objectives
 
-**Performance must be measured in your actual deployment environment.**
+**Design objectives for registration flow (must be verified by measurement):**
 
-Variables that affect real-world performance:
-- **Cryptographic operations:** Depends on hardware (CPU, crypto acceleration)
-- **Database operations:** Depends on disk, indexing, concurrent load
-- **Network latency:** Depends on infrastructure between components
-- **Approval polling:** Depends on configured poll interval (5s default is tunable)
+| Operation | Objective | Depends On | Verification |
+|-----------|-----------|-----------|--------------|
+| Challenge generation | <100ms | Random number generation | Single operation test |
+| Ed25519 signature | <200ms | CPU, key size | Single operation test |
+| Signature verification | <200ms | CPU, key size | Single operation test |
+| Database write | <500ms | PostgreSQL, disk I/O | Insert audit record |
+| Sub-agent registration | 1-5s (total) | All above + concurrent load | Load test with 100 sub-agents |
 
-**Do not assume the "typical" timings.** Test your actual deployment with:
-- Real hardware and database
-- Expected agent concurrency
-- Your network topology
-- Production-like secret volumes
+**Measurement Protocol:**
 
-For primary agents waiting for approval:
-- **First poll:** Background (configurable)
-- **Subsequent polls:** Every 5 seconds (configurable interval)
-- **Approval timeout:** 5 minutes (configurable)
+1. **Crypto Performance** (hardware-dependent)
+   - Test on target hardware (CPU, crypto acceleration)
+   - Measure Ed25519 sign/verify 1000x each
+   - Identify p50, p95, p99 latencies
+   - Document hardware specs with results
+
+2. **Database Performance** (load-dependent)
+   - Measure INSERT latency (warm and cold cache)
+   - Test with concurrent registrations (1, 10, 100)
+   - Monitor lock contention
+   - Monitor disk I/O
+
+3. **Full Registration Flow** (integrated test)
+   - Primary agent registration (measure end-to-end)
+   - Sub-agent registration (measure end-to-end)
+   - Concurrent registrations (1, 10, 100 simultaneous)
+   - Approval polling (measure poll latency)
+
+4. **Record Deltas**
+   ```
+   Operation: Ed25519 signature
+   Objective: <200ms
+   Actual (hardware1): 85ms ✓ PASS
+   Actual (hardware2): 450ms ✗ MISS (need crypto acceleration)
+   ```
+
+**Variables You Control:**
+- **Approval poll interval:** Default 5s, adjustable based on latency
+- **Timeout:** Default 5 min, adjustable based on SLA
+- **Approval deadline:** Configure per-agent-type
+
+**Variables You Cannot Assume:**
+- Cryptographic performance (depends on CPU)
+- Database latency (depends on load, indexing)
+- Network latency (depends on topology)
+
+Measure before making commitments.
 
 ## Environment Variables
 

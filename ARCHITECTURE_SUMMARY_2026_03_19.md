@@ -182,13 +182,20 @@ Complete infrastructure delivered in three major systems.
 
 | Operation | Latency | Notes |
 |-----------|---------|-------|
-| Operation | Status | Notes |
-|-----------|--------|-------|
-| **Performance metrics** | ⚠️ NOT ESTIMATED | Must be measured from actual system load tests |
-| **Cache performance** | TBD | Depends on: data size, concurrency, hardware |
-| **Database latency** | TBD | Depends on: queries, indexing, load, disk I/O |
-| **External services** | TBD | Depends on: network, target service, auth overhead |
-| **Encryption overhead** | TBD | Depends on: secret size, hardware acceleration |
+| Component | Design Objective | Verification Status |
+|-----------|-----------------|-------------------|
+| Cache hit latency | <50ms (p95) | ⏳ Pending load test |
+| Vault access | 100-500ms (p95) | ⏳ Pending load test |
+| Registration | 1-5s (p95) | ⏳ Pending load test |
+| External service fallback | +300-2000ms | ⏳ Pending measurement |
+| Concurrent agents | 100+ simultaneous | ⏳ Pending stress test |
+
+**Measurement Plan:**
+1. Load test each component in isolation
+2. Integrated load test with realistic workload
+3. Document actual vs objective
+4. Optimize if delta exceeds SLA
+5. Update objectives based on verified data
 
 ## Key Design Decisions
 

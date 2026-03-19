@@ -505,40 +505,51 @@ Hyphae caches results per route:
 // Cache auto-expires after TTL
 ```
 
-## Performance Requirements
+## Performance Objectives
 
-**IMPORTANT: Performance metrics must be derived from actual measured test data, not projections or estimates.**
+**Design objectives (targets) for the Service API gateway:**
 
-Required load testing before production:
+| Operation | Objective | Depends On | Verification |
+|-----------|-----------|-----------|--------------|
+| Gateway lookup | <10ms (p95) | Hash map, permission checks | Load test with 1000 agents |
+| Cache hit | <50ms (p95) | Memory I/O | Measure with full cache |
+| Primary connector | 100-500ms (p95) | Connector + backend | Measure actual backend |
+| Fallback attempt | +300-2000ms (p95) | Primary latency + retry | Measure with slow primary |
+| Throughput | 1000+ req/sec | Connection pool, database | Load test to saturation |
 
-1. **Baseline Measurements**
-   - Single request latency (p50, p95, p99)
-   - Throughput (requests/sec per agent)
-   - Cache hit rate vs miss rate impact
-   - Database query times (simple vs complex)
-   - Encryption/decryption overhead
+**Measurement Protocol:**
 
-2. **Load Testing Scenarios**
-   - Concurrent requests (1, 10, 100, 1000 agents)
-   - Cache performance degradation under load
-   - Fallback behavior with real latencies
-   - External service timeout handling
-   - Database connection pool exhaustion
+1. **Baseline Test** (single agent, no load)
+   - Warm cache: measure latency distribution
+   - Cold cache: measure latency distribution
+   - Concurrent requests (10, 100, 1000 agents)
 
-3. **Real-World Conditions**
-   - Database under production load (disk I/O, lock contention)
-   - External services with realistic latencies (100ms-5s)
-   - Network conditions (jitter, packet loss, latency spikes)
-   - Secret sizes (bytes to MB)
-   - Concurrent fallback attempts
+2. **Load Test** (sustained traffic)
+   - Ramp up from 1 to 1000 concurrent agents
+   - Monitor latency percentiles (p50, p95, p99)
+   - Monitor throughput and error rate
+   - Monitor resource utilization (CPU, memory, connections)
 
-**Do not assume performance.** Measure actual system behavior before:
-- Making SLA commitments
-- Sizing infrastructure resources
-- Setting timeout values
-- Planning cache TTLs
-- Designing fallback strategies
-- Committing to deployment schedules
+3. **Stress Test** (beyond expected load)
+   - Primary backend degradation/timeout
+   - Fallback chain behavior under load
+   - Database connection pool limits
+   - Memory with large secret values
+
+4. **Record Results**
+   ```
+   Operation: cache_hit
+   Objective: <50ms (p95)
+   Actual: 42ms (p95)
+   Status: ✓ PASS
+   
+   Operation: fallback_latency
+   Objective: +500ms per fallback
+   Actual: +1200ms per fallback
+   Status: ✗ MISS (2.4x slower, needs optimization)
+   ```
+
+**Do not commit to SLA until measured data validates objectives.**
 
 ## Error Handling
 

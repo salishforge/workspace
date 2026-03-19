@@ -255,18 +255,25 @@ setInterval(async () => {
 // - FROM WHICH IP address
 ```
 
-## Performance Metrics
+## Performance Objectives
 
-**Performance characteristics must be measured in your actual deployment, not assumed from these estimates.**
+**Design objectives (targets) that must be verified by actual measurement:**
 
-Required measurements before production:
-- Cache hit latency (measure with instrumentation)
-- Database query times (depends on: data size, indexing, load)
-- Encryption/decryption overhead (depends on: secret size, hardware)
-- PostgreSQL write latency (depends on: disk, synchronous settings)
-- Concurrent request behavior (depends on: connection pool size)
+| Operation | Objective | Depends On | Measurement Plan |
+|-----------|-----------|-----------|-----------------|
+| Cache hit | <50ms (p95) | Hash performance, memory I/O | Load test with expected concurrency |
+| Cache miss | 100-500ms (p95) | Database query + decrypt | Measure with production data size |
+| Secret set | 200-800ms (p95) | Encrypt + PostgreSQL write | Measure with concurrent writes |
+| Secret list | 300-1000ms (p95) | Query + decrypt multiple | Measure with large secret counts |
 
-Measure these under real load before making SLA commitments.
+**Measurement Protocol:**
+1. Deploy on target hardware
+2. Load test with realistic concurrency (agents × requests/sec)
+3. Measure p50, p95, p99 latencies
+4. Document actual vs objective
+5. Optimize if delta exceeds acceptable threshold
+
+**Do not make SLA commitments until you have measured data.**
 
 ## Encryption at Rest
 
