@@ -1,0 +1,63 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: hyphae-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-hyphae}
+      POSTGRES_USER: ${DB_USER:-hyphae_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-hyphae_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hyphae
+    restart: unless-stopped
+
+  hyphae-core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hyphae-core
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-hyphae}
+      DB_USER: ${DB_USER:-hyphae_user}
+      DB_PASSWORD: ${DB_PASSWORD:-changeme}
+      PORT: ${PORT:-3100}
+      NODE_ENV: ${NODE_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "127.0.0.1:${PORT:-3100}:${PORT:-3100}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-3100}/api/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - hyphae
+    volumes:
+      - hyphae_logs:/var/log/hyphae
+
+volumes:
+  postgres_data:
+    driver: local
+  hyphae_logs:
+    driver: local
+
+networks:
+  hyphae:
+    driver: bridge
