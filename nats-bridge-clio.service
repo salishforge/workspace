@@ -1,0 +1,18 @@
+[Unit]
+Description=NATS Bridge for Clio (CoS)
+After=network.target nats-server.service
+Wants=nats-server.service
+
+[Service]
+Type=simple
+User=artificium
+WorkingDirectory=/home/artificium/.openclaw/workspace
+ExecStart=/usr/bin/node /home/artificium/.openclaw/workspace/nats-bridge-clio.js
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment="NODE_ENV=production"
+
+[Install]
+WantedBy=multi-user.target

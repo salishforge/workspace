@@ -1,0 +1,19 @@
+[Unit]
+Description=NATS Audit Subscriber (logs all messages to PostgreSQL)
+After=network.target nats-server.service postgresql.service
+Wants=nats-server.service postgresql.service
+
+[Service]
+Type=simple
+User=artificium
+WorkingDirectory=/home/artificium/.openclaw/workspace
+ExecStart=/usr/bin/node /home/artificium/.openclaw/workspace/nats-audit-subscriber.js
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment="NODE_ENV=production"
+Environment="DATABASE_URL=postgresql://postgres:postgres@localhost:5432/salish_forge"
+
+[Install]
+WantedBy=multi-user.target

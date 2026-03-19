@@ -149,62 +149,62 @@ You MUST produce the following output:
 
 ---
 
-## Integration with Tidepool & Hyphae
+## Integration with Hyphae: Multi-Framework Agent Coordination
 
-### Architecture: Agent Coordination via Hyphae
+### Architecture: Framework-Agnostic Agent Coordination
 
 ```
-┌─────────────────────────────────────────────────┐
-│ Main Agent (Tidepool-Flint)                     │
-│                                                 │
-│ sessions_spawn(                                 │
-│   task="detailed task with explicit output",   │
-│   agentId="tidepool-clio"  ← can target other  │
-│ )                                               │
-└───────────────────┬─────────────────────────────┘
-                    │ (OpenClaw framework)
-                    ↓
-┌─────────────────────────────────────────────────┐
-│ Subagent Session (Tidepool-Clio)                │
-│                                                 │
-│ 1. Execute work (exec, read, write)             │
-│ 2. Register self in Hyphae: /services/register │
-│ 3. Produce explicit output                      │
-│ 4. Announce back to parent                      │
-└───────────────────┬─────────────────────────────┘
-                    │ (Hyphae service registry)
-                    ↓
-┌─────────────────────────────────────────────────┐
-│ Hyphae (Service Registry on Hyphae port 3004)  │
-│                                                 │
-│ - Service discovery (agents find each other)    │
-│ - Capability routing (agent X → agent Y)        │
-│ - Health monitoring                             │
-│ - Multi-region federation                       │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│ Any Agent Framework (nanoclaw, OpenClaw, AutoGen, CrewAI)   │
+│                                                              │
+│ - Implements subagent task templates                         │
+│ - Registers services with Hyphae                             │
+│ - Calls other agents via Hyphae discovery                    │
+│ - Shares memory via MemForge                                 │
+│ - Authenticates via OAuth2                                   │
+└──────────────────────────────────┬───────────────────────────┘
+                                   │
+                    ┌──────────────┼──────────────┐
+                    │              │              │
+                    ↓              ↓              ↓
+         ┌────────────────┐ ┌────────────────┐ ┌─────────────┐
+         │ Hyphae         │ │ MemForge       │ │ OAuth2      │
+         │ (Discovery &   │ │ (Shared        │ │ (Identity & │
+         │  Federation)   │ │  Memory)       │ │  Scopes)    │
+         └────────────────┘ └────────────────┘ └─────────────┘
 ```
 
-### What Tidepool Needs
+### What Multi-Framework Coordination Requires
 
-1. **Subagent Task Templates**
-   - Proven task patterns that work
+1. **Subagent Task Templates (Framework-Agnostic)**
+   - Proven task patterns that work across frameworks
    - Example: "Implement feature X with outputs A, B, C"
    - Built-in announce statements
+   - Work with nanoclaw, OpenClaw, AutoGen, CrewAI, etc.
 
-2. **Hyphae Service Registration**
-   - Each Tidepool agent auto-registers with Hyphae
-   - Can query other agents via Hyphae
-   - Service discovery within the mesh
+2. **Hyphae Service Registration Protocol**
+   - ANY agent framework can register services
+   - Query other agents' capabilities (regardless of framework)
+   - Service discovery across the mesh
+   - Framework adapters (thin layer) for each runtime
 
-3. **Result Aggregation**
-   - Main agent collects subagent announces
-   - Synthesizes results
-   - Tracks completion
+3. **Agent-to-Agent Communication Layer**
+   - RPC pattern: Agent A discovers Agent B via Hyphae
+   - Calls Agent B asynchronously
+   - Receives response routed back via Hyphae
+   - Works across framework boundaries
 
-4. **Error Handling**
-   - Subagent timeout → escalate
-   - Announce missing → retry or escalate
-   - Clear failure modes
+4. **Multi-Framework Result Aggregation**
+   - Main agent (any framework) collects results
+   - Synthesizes from multiple frameworks
+   - Tracks completion across heterogeneous agents
+   - Consistent error handling
+
+5. **Error Handling**
+   - Timeout → escalate
+   - Service not found → fallback
+   - Framework-specific errors normalized
+   - Clear failure modes across frameworks
 
 ---
 
@@ -319,31 +319,79 @@ With this, the main agent can spawn orchestrator subagents that themselves spawn
 
 ---
 
-## Next Steps
+## Next Steps: Building the Most Advanced Agent Coordination Platform
 
-1. **Create Subagent Task Template Library**
-   - Proven patterns for different task types
-   - Built-in announce statements
-   - Example: scale testing, code review, feature implementation
+### Phase 1: Hyphae Service Contract (Week 1)
+1. **Formalize Agent Registration Protocol**
+   - Any agent framework can register services
+   - Standardized service metadata (name, version, capabilities, endpoints)
+   - Health check endpoint + heartbeat
 
-2. **Integrate Tidepool with Hyphae**
-   - Each Tidepool agent auto-registers with Hyphae on startup
-   - Query other agents via Hyphae service discovery
-   - Enable distributed agent coordination
+2. **Implement Agent Discovery API**
+   - Query available services by capability
+   - Get agent metadata + contact info
+   - Route requests through Hyphae to target agent
 
-3. **Build Subagent Orchestrator Framework**
-   - Main agent → orchestrator subagent → worker subagents
-   - Aggregates results from workers
-   - Synthesizes final reply
+3. **Agent-to-Agent RPC Pattern**
+   - Agent A discovers Agent B via Hyphae
+   - Calls B asynchronously (no wait)
+   - Response delivered back to A
+   - Framework-agnostic (works with nanoclaw, OpenClaw, etc.)
 
-4. **Test This Week**
-   - Deploy scale test via properly-designed subagent
-   - Deploy multi-region test via properly-designed subagent
-   - Verify both complete successfully
+### Phase 2: Multi-Framework Examples (Week 2)
+1. **Nanoclaw Integration Example**
+   - Show nanoclaw agent registering with Hyphae
+   - Demonstrate inter-agent RPC
+   - Full working example (code + docs)
+
+2. **OpenClaw Integration Example**
+   - Similar to nanoclaw but using OpenClaw framework
+   - Show heterogeneous agent mesh
+
+3. **Multi-Agent Coordination Demo**
+   - 3+ agents (different frameworks) working together
+   - Publicly available reference implementation
+
+### Phase 3: Distributed Transaction Support (Week 3-4)
+1. **Saga Pattern for Multi-Agent Workflows**
+   - Agent A initiates transaction
+   - Calls Agents B, C, D in parallel
+   - One fails → compensation
+   - All succeed → commit
+   - No partial failures
+
+2. **Memory Sharing for Multi-Agent Reasoning**
+   - Agents store discoveries in MemForge
+   - Semantic search across all agent memories
+   - Shared reasoning context
+   - Privacy controls (who can read what)
+
+### Phase 4: Make This Public (Week 4+)
+1. **Hyphae Documentation**
+   - Service contract spec
+   - Integration guides (one per framework)
+   - Architecture diagrams
+   - Example code
+
+2. **Open-Source Status**
+   - Position Salish Forge as community-driven platform
+   - Accept framework adapters from community
+   - Governance for standards
 
 ---
 
-**Status:** READY FOR IMPLEMENTATION ✅
+## Key Positioning Shift
 
-The subagent framework works. I just need to use it correctly.
+**FROM:** Salish Forge = Another agent framework (Tidepool fork)  
+**TO:** Salish Forge = Universal agent coordination platform
+
+**Market Advantage:**
+- Framework-agnostic (bigger TAM)
+- Community-aligned (uses nanoclaw, not fork)
+- Higher defensibility (network effects through Hyphae)
+- Lower maintenance (no framework fork)
+
+**Status:** STRATEGIC PIVOT COMPLETE ✅
+
+Now executing: Most advanced agent coordination platform in existence.
 

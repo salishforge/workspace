@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "salishforge-mcp": {
+      "baseUrl": "http://100.97.161.7:8484/mcp",
+      "headers": {
+        "Authorization": "Bearer sf-mcp-collab-2026"
+      }
+    }
+  },
+  "imports": []
+}
