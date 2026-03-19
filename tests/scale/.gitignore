@@ -1,0 +1,6 @@
+results/*.json
+reports/*.md
+reports/*.csv
+!results/.gitkeep
+!reports/.gitkeep
+node_modules/
