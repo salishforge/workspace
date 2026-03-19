@@ -7,8 +7,8 @@
     "build": "tsc",
     "dev:flint": "HYPHAE_URL=http://localhost:3100 AGENT_ENDPOINT=http://localhost:3050 PORT=3050 ts-node flint-crewai.ts",
     "dev:clio": "HYPHAE_URL=http://localhost:3100 AGENT_ENDPOINT=http://localhost:3051 PORT=3051 ts-node clio-autogen.ts",
-    "start:flint": "node dist/flint-crewai.js",
-    "start:clio": "node dist/clio-autogen.js",
+    "start:flint": "node dist/flint-crewai-real.js",
+    "start:clio": "node dist/clio-autogen-real.js",
     "test": "jest",
     "lint": "eslint . --ext .ts"
   },
