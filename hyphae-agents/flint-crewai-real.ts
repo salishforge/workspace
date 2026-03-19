@@ -66,12 +66,14 @@ export class FlintAgentReal extends HyphaeAgent {
     if (!apiKey) {
       try {
         const fs = require('fs');
-        const path = require('path');
-        const envPath = path.join(process.env.HOME || '~', '.bashrc');
-        const bashrc = fs.readFileSync(envPath, 'utf8');
-        const match = bashrc.match(/export GEMINI_API_KEY="([^"]+)"/);
-        if (match) {
-          apiKey = match[1];
+        const home = process.env.HOME || '/home/artificium';
+        const bashrcPath = `${home}/.bashrc`;
+        if (fs.existsSync(bashrcPath)) {
+          const bashrc = fs.readFileSync(bashrcPath, 'utf8');
+          const match = bashrc.match(/export GEMINI_API_KEY="([^"]+)"/);
+          if (match) {
+            apiKey = match[1];
+          }
         }
       } catch (e) {
         // Fallback failed, will throw below
