@@ -2,6 +2,8 @@ const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
 const path = require('path');
+const https = require('https');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.DASHBOARD_PORT || 3200;
@@ -151,9 +153,15 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Hyphae Dashboard running on http://localhost:${PORT}`);
+// Start HTTPS server
+const httpsOptions = {
+  key: fs.readFileSync(path.join(__dirname, 'key.pem')),
+  cert: fs.readFileSync(path.join(__dirname, 'cert.pem')),
+};
+
+https.createServer(httpsOptions, app).listen(PORT, () => {
+  console.log(`🚀 Hyphae Dashboard running on https://localhost:${PORT}`);
   console.log(`   Proxy URL: ${HYPHAE_PROXY_URL}`);
   console.log(`   Core URL: ${HYPHAE_CORE_URL}`);
+  console.log(`   ⚠️  Self-signed certificate (browser warning is normal)`);
 });
