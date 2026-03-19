@@ -483,7 +483,7 @@ app.post("/api/rpc/call", async (req: Request, res: Response) => {
             timeout
           )
         ),
-      ]);
+      ]) as Response;
 
       const responseData = await response.json();
       callSuccess = responseData.success !== false;

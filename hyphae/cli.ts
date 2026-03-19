@@ -45,7 +45,7 @@ function parseArgs(args: string[]): { command: string; args: string[]; options: 
       const value = args[i + 1];
 
       if (value && !value.startsWith("--")) {
-        options[key as keyof CLIOptions] = value as any;
+        (options as Record<string, any>)[key] = value;
         i++;
       }
     } else {
