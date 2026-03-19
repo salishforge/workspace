@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hyphae Dashboard</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+      color: #e0e0e0;
+      min-height: 100vh;
+    }
+
+    .container {
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Auth Screen */
+    .auth-screen {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      min-height: 100vh;
+    }
+
+    .auth-card {
+      background: rgba(20, 30, 48, 0.8);
+      border: 1px solid rgba(100, 150, 255, 0.3);
+      border-radius: 12px;
+      padding: 40px;
+      width: 100%;
+      max-width: 400px;
+      backdrop-filter: blur(10px);
+    }
+
+    .auth-card h1 {
+      font-size: 28px;
+      margin-bottom: 10px;
+      color: #6496ff;
+      text-align: center;
+    }
+
+    .auth-card p {
+      text-align: center;
+      color: #9ca3af;
+      margin-bottom: 30px;
+      font-size: 14px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    .form-group label {
+      display: block;
+      margin-bottom: 8px;
+      color: #9ca3af;
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .form-group input {
+      width: 100%;
+      padding: 12px;
+      background: rgba(30, 40, 60, 0.8);
+      border: 1px solid rgba(100, 150, 255, 0.2);
+      border-radius: 6px;
+      color: #e0e0e0;
+      font-size: 14px;
+      transition: all 0.3s;
+    }
+
+    .form-group input:focus {
+      outline: none;
+      border-color: #6496ff;
+      box-shadow: 0 0 10px rgba(100, 150, 255, 0.2);
+    }
+
+    .btn {
+      width: 100%;
+      padding: 12px;
+      background: linear-gradient(135deg, #6496ff 0%, #4575e6 100%);
+      border: none;
+      border-radius: 6px;
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+      font-size: 14px;
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(100, 150, 255, 0.3);
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .error {
+      background: rgba(255, 100, 100, 0.1);
+      border: 1px solid rgba(255, 100, 100, 0.3);
+      border-radius: 6px;
+      padding: 12px;
+      color: #ff6464;
+      margin-bottom: 20px;
+      font-size: 14px;
+      display: none;
+    }
+
+    .error.show {
+      display: block;
+    }
+
+    /* Dashboard */
+    .dashboard {
+      display: none;
+      width: 100%;
+    }
+
+    .header {
+      background: rgba(20, 30, 48, 0.5);
+      border-bottom: 1px solid rgba(100, 150, 255, 0.1);
+      padding: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .header h1 {
+      font-size: 24px;
+      color: #6496ff;
+    }
+
+    .header-info {
+      display: flex;
+      gap: 20px;
+      align-items: center;
+      font-size: 14px;
+    }
+
+    .status-badge {
+      padding: 6px 12px;
+      background: rgba(50, 200, 100, 0.2);
+      border: 1px solid rgba(50, 200, 100, 0.4);
+      border-radius: 4px;
+      color: #32c864;
+      font-weight: 600;
+    }
+
+    .logout-btn {
+      padding: 8px 16px;
+      background: rgba(255, 100, 100, 0.1);
+      border: 1px solid rgba(255, 100, 100, 0.3);
+      border-radius: 6px;
+      color: #ff6464;
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.3s;
+    }
+
+    .logout-btn:hover {
+      background: rgba(255, 100, 100, 0.2);
+    }
+
+    .main-content {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .sidebar {
+      width: 280px;
+      background: rgba(20, 30, 48, 0.3);
+      border-right: 1px solid rgba(100, 150, 255, 0.1);
+      overflow-y: auto;
+      padding: 20px;
+    }
+
+    .sidebar h2 {
+      font-size: 14px;
+      color: #9ca3af;
+      text-transform: uppercase;
+      margin-top: 20px;
+      margin-bottom: 12px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+
+    .agent-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .agent-item {
+      padding: 12px;
+      background: rgba(100, 150, 255, 0.1);
+      border: 1px solid rgba(100, 150, 255, 0.2);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.3s;
+      font-size: 14px;
+      color: #e0e0e0;
+    }
+
+    .agent-item:hover {
+      background: rgba(100, 150, 255, 0.2);
+      border-color: rgba(100, 150, 255, 0.4);
+    }
+
+    .agent-item.active {
+      background: rgba(100, 150, 255, 0.3);
+      border-color: #6496ff;
+      color: #6496ff;
+      font-weight: 600;
+    }
+
+    .agent-status {
+      font-size: 12px;
+      color: #9ca3af;
+      margin-top: 4px;
+    }
+
+    .agent-status.healthy {
+      color: #32c864;
+    }
+
+    .content-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .chat-container {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .chat-container.active {
+      display: flex;
+    }
+
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .message {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .message.user {
+      justify-content: flex-end;
+    }
+
+    .message.agent {
+      justify-content: flex-start;
+    }
+
+    .message-content {
+      max-width: 70%;
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .message.user .message-content {
+      background: linear-gradient(135deg, #6496ff 0%, #4575e6 100%);
+      color: white;
+    }
+
+    .message.agent .message-content {
+      background: rgba(100, 150, 255, 0.1);
+      border: 1px solid rgba(100, 150, 255, 0.2);
+      color: #e0e0e0;
+    }
+
+    .message.system .message-content {
+      background: rgba(255, 150, 50, 0.1);
+      border: 1px solid rgba(255, 150, 50, 0.2);
+      color: #ff9632;
+      width: 100%;
+      text-align: center;
+    }
+
+    .input-area {
+      border-top: 1px solid rgba(100, 150, 255, 0.1);
+      padding: 20px;
+      display: flex;
+      gap: 12px;
+    }
+
+    .input-area input {
+      flex: 1;
+      padding: 12px;
+      background: rgba(30, 40, 60, 0.8);
+      border: 1px solid rgba(100, 150, 255, 0.2);
+      border-radius: 6px;
+      color: #e0e0e0;
+      font-size: 14px;
+    }
+
+    .input-area input:focus {
+      outline: none;
+      border-color: #6496ff;
+      box-shadow: 0 0 10px rgba(100, 150, 255, 0.2);
+    }
+
+    .send-btn {
+      padding: 12px 24px;
+      background: linear-gradient(135deg, #6496ff 0%, #4575e6 100%);
+      border: none;
+      border-radius: 6px;
+      color: white;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.3s;
+      font-size: 14px;
+    }
+
+    .send-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(100, 150, 255, 0.3);
+    }
+
+    .send-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .stat-card {
+      background: rgba(100, 150, 255, 0.1);
+      border: 1px solid rgba(100, 150, 255, 0.2);
+      border-radius: 6px;
+      padding: 12px;
+      font-size: 13px;
+    }
+
+    .stat-card .label {
+      color: #9ca3af;
+      margin-bottom: 4px;
+    }
+
+    .stat-card .value {
+      font-size: 18px;
+      font-weight: 600;
+      color: #6496ff;
+    }
+
+    .loading {
+      text-align: center;
+      color: #9ca3af;
+      padding: 20px;
+      font-size: 14px;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(100, 150, 255, 0.3);
+      border-top-color: #6496ff;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: rgba(100, 150, 255, 0.05);
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: rgba(100, 150, 255, 0.3);
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(100, 150, 255, 0.5);
+    }
+
+    @media (max-width: 768px) {
+      .sidebar {
+        display: none;
+      }
+      
+      .message-content {
+        max-width: 90%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Auth Screen -->
+    <div class="auth-screen" id="authScreen">
+      <div class="auth-card">
+        <h1>⚡ Hyphae</h1>
+        <p>Agent Coordination Platform</p>
+        
+        <div class="error" id="authError"></div>
+
+        <div class="form-group">
+          <label>API Key</label>
+          <input type="password" id="apiKeyInput" placeholder="Enter your API key" />
+        </div>
+
+        <button class="btn" id="loginBtn" onclick="handleLogin()">
+          Connect to Hyphae
+        </button>
+
+        <p style="margin-top: 20px; text-align: center; color: #6ca3ff; font-size: 12px;">
+          Connecting to: <strong>100.97.161.7:3000</strong>
+        </p>
+      </div>
+    </div>
+
+    <!-- Dashboard -->
+    <div class="dashboard" id="dashboard">
+      <!-- Header -->
+      <div class="header">
+        <h1>⚡ Hyphae Dashboard</h1>
+        <div class="header-info">
+          <div id="healthStatus" class="status-badge">● Connecting...</div>
+          <button class="logout-btn" onclick="handleLogout()">Logout</button>
+        </div>
+      </div>
+
+      <!-- Main Content -->
+      <div class="main-content">
+        <!-- Sidebar -->
+        <div class="sidebar">
+          <h2>Available Agents</h2>
+          <div class="agent-list" id="agentList"></div>
+
+          <h2>Quick Stats</h2>
+          <div class="stats">
+            <div class="stat-card">
+              <div class="label">Agents Online</div>
+              <div class="value" id="agentCount">0</div>
+            </div>
+            <div class="stat-card">
+              <div class="label">RPC Calls</div>
+              <div class="value" id="callCount">0</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Content Area -->
+        <div class="content-area">
+          <div class="chat-container" id="chatContainer">
+            <div class="messages" id="messages"></div>
+            <div class="input-area">
+              <input 
+                type="text" 
+                id="messageInput" 
+                placeholder="Type your message..." 
+                onkeypress="handleKeyPress(event)"
+              />
+              <button class="send-btn" onclick="sendMessage()" id="sendBtn">Send</button>
+            </div>
+          </div>
+
+          <div style="padding: 40px; text-align: center; color: #9ca3af;">
+            <p>Select an agent from the left to start chatting</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let authToken = null;
+    let currentAgent = null;
+    let messageCount = 0;
+    let callCount = 0;
+
+    async function handleLogin() {
+      const apiKey = document.getElementById('apiKeyInput').value;
+      const loginBtn = document.getElementById('loginBtn');
+      const errorDiv = document.getElementById('authError');
+
+      if (!apiKey) {
+        errorDiv.textContent = 'API key is required';
+        errorDiv.classList.add('show');
+        return;
+      }
+
+      loginBtn.disabled = true;
+      loginBtn.textContent = 'Connecting...';
+
+      try {
+        const response = await fetch('/api/auth/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: 'john-broker',
+            apiKey: apiKey,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Authentication failed');
+        }
+
+        const data = await response.json();
+        authToken = data.token;
+
+        document.getElementById('authScreen').style.display = 'none';
+        document.getElementById('dashboard').style.display = 'flex';
+
+        loadAgents();
+        checkHealth();
+        setInterval(checkHealth, 5000);
+      } catch (error) {
+        errorDiv.textContent = error.message;
+        errorDiv.classList.add('show');
+        loginBtn.disabled = false;
+        loginBtn.textContent = 'Connect to Hyphae';
+      }
+    }
+
+    async function loadAgents() {
+      try {
+        const response = await fetch('/api/services', {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+
+        const data = await response.json();
+        const agentList = document.getElementById('agentList');
+        agentList.innerHTML = '';
+
+        let healthyCount = 0;
+        data.services?.forEach((agent) => {
+          if (agent.healthy) healthyCount++;
+
+          const div = document.createElement('div');
+          div.className = 'agent-item';
+          div.onclick = () => selectAgent(agent);
+          div.innerHTML = `
+            <div>${agent.name}</div>
+            <div class="agent-status ${agent.healthy ? 'healthy' : ''}">
+              ${agent.healthy ? '● Online' : '● Offline'}
+            </div>
+          `;
+          agentList.appendChild(div);
+        });
+
+        document.getElementById('agentCount').textContent = healthyCount;
+      } catch (error) {
+        console.error('Failed to load agents:', error);
+      }
+    }
+
+    function selectAgent(agent) {
+      currentAgent = agent;
+      document.querySelectorAll('.agent-item').forEach((el) => {
+        el.classList.remove('active');
+      });
+      event.target.closest('.agent-item').classList.add('active');
+
+      document.getElementById('messages').innerHTML = '';
+      messageCount = 0;
+      document.getElementById('chatContainer').classList.add('active');
+
+      addSystemMessage(`Connected to ${agent.name}`);
+    }
+
+    async function sendMessage() {
+      const input = document.getElementById('messageInput');
+      const message = input.value.trim();
+
+      if (!message || !currentAgent) return;
+
+      input.value = '';
+      messageCount++;
+
+      addMessage(message, 'user');
+
+      try {
+        const response = await fetch('/api/rpc/call', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            sourceAgent: 'john-broker',
+            targetAgent: currentAgent.agentId,
+            capability: 'status',
+            params: { task: message },
+            timeout: 30000,
+          }),
+        });
+
+        const data = await response.json();
+        callCount++;
+        document.getElementById('callCount').textContent = callCount;
+
+        if (data.success) {
+          const result = data.result || {};
+          const resultText = typeof result === 'object' 
+            ? JSON.stringify(result, null, 2) 
+            : String(result);
+          addMessage(resultText, 'agent');
+        } else {
+          addMessage(`Error: ${data.error || 'Unknown error'}`, 'system');
+        }
+      } catch (error) {
+        addMessage(`Error: ${error.message}`, 'system');
+      }
+    }
+
+    function addMessage(text, type) {
+      const messagesDiv = document.getElementById('messages');
+      const msgDiv = document.createElement('div');
+      msgDiv.className = `message ${type}`;
+      msgDiv.innerHTML = `<div class="message-content">${escapeHtml(text)}</div>`;
+      messagesDiv.appendChild(msgDiv);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    function addSystemMessage(text) {
+      const messagesDiv = document.getElementById('messages');
+      const msgDiv = document.createElement('div');
+      msgDiv.className = 'message system';
+      msgDiv.innerHTML = `<div class="message-content">${escapeHtml(text)}</div>`;
+      messagesDiv.appendChild(msgDiv);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    async function checkHealth() {
+      try {
+        const response = await fetch('/api/health');
+        if (response.ok) {
+          document.getElementById('healthStatus').textContent = '● System Healthy';
+          document.getElementById('healthStatus').style.background = 'rgba(50, 200, 100, 0.2)';
+          document.getElementById('healthStatus').style.borderColor = 'rgba(50, 200, 100, 0.4)';
+          document.getElementById('healthStatus').style.color = '#32c864';
+        }
+      } catch (error) {
+        document.getElementById('healthStatus').textContent = '● System Error';
+        document.getElementById('healthStatus').style.background = 'rgba(255, 100, 100, 0.2)';
+        document.getElementById('healthStatus').style.borderColor = 'rgba(255, 100, 100, 0.4)';
+        document.getElementById('healthStatus').style.color = '#ff6464';
+      }
+    }
+
+    function handleKeyPress(event) {
+      if (event.key === 'Enter') {
+        sendMessage();
+      }
+    }
+
+    function handleLogout() {
+      authToken = null;
+      currentAgent = null;
+      document.getElementById('authScreen').style.display = 'flex';
+      document.getElementById('dashboard').style.display = 'none';
+      document.getElementById('apiKeyInput').value = '';
+      document.getElementById('authError').classList.remove('show');
+    }
+
+    function escapeHtml(text) {
+      const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;',
+      };
+      return text.replace(/[&<>"']/g, (m) => map[m]);
+    }
+  </script>
+</body>
+</html>
