@@ -239,6 +239,15 @@ const rpcMethods = {
   'model.check_override_policy': async (params) => {
     return await callModelRouter('model.checkOverridePolicy', params);
   },
+  'model.get_policy': async (params) => {
+    return await callModelRouter('model.getPolicy', params);
+  },
+  'model.list_policies': async (params) => {
+    return await callModelRouter('model.listPolicies', params);
+  },
+  'model.update_policy': async (params) => {
+    return await callModelRouter('model.updatePolicy', params);
+  },
   'model.pending_approvals': async (params) => {
     return { message: 'Check admin dashboard at http://localhost:3104/approvals' };
   }

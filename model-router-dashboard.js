@@ -65,6 +65,7 @@ function renderHTML(title, content) {
       padding: 8px 12px;
       border-radius: 4px;
       transition: all 0.2s;
+      cursor: pointer;
     }
     header .nav a:hover, header .nav a.active {
       color: #4a9eff;
@@ -187,10 +188,11 @@ function renderHTML(title, content) {
     <div class="container">
       <h1>⚡ Model Router Dashboard</h1>
       <div class="nav">
-        <a href="/" class="active">Overview</a>
+        <a href="/">Overview</a>
         <a href="/approvals">Approvals</a>
         <a href="/usage">Usage</a>
         <a href="/costs">Costs</a>
+        <a href="/policies">Policies</a>
       </div>
     </div>
   </header>
@@ -210,6 +212,144 @@ function renderHTML(title, content) {
 // ─────────────────────────────────────────────────────────────
 // Dashboard Pages
 // ─────────────────────────────────────────────────────────────
+
+async function policiesPage() {
+  try {
+    const result = await db.query(`
+      SELECT DISTINCT agent_id FROM hyphae_model_api_keys 
+      ORDER BY agent_id
+    `);
+    
+    const agents = result.rows.map(r => r.agent_id);
+    
+    // Get current policies (from database or hardcoded)
+    const policies = {
+      'flint': {
+        allowAnyModel: true,
+        autoApproveUnder: 50.0,
+        blockedModels: []
+      },
+      'clio': {
+        allowAnyModel: false,
+        allowedModels: ['claude-max-100', 'gemini-api-pro', 'claude-api-sonnet'],
+        autoApproveUnder: 20.0,
+        blockedModels: ['claude-api-opus']
+      }
+    };
+    
+    const services = await db.query('SELECT service_id, service_name FROM hyphae_model_services WHERE is_active = true');
+    const serviceList = services.rows;
+    
+    // Build policy form HTML
+    let policyForms = agents.map(agent => {
+      const policy = policies[agent] || {
+        allowAnyModel: false,
+        allowedModels: [],
+        autoApproveUnder: 5.0,
+        blockedModels: []
+      };
+      
+      return `
+        <div style="border: 1px solid #444; padding: 20px; margin-bottom: 20px; border-radius: 6px;">
+          <h3 style="color: #4a9eff; margin-top: 0;">${agent}</h3>
+          
+          <div style="margin-bottom: 15px;">
+            <label style="display: block; margin-bottom: 8px; color: #999;">
+              <input type="checkbox" ${policy.allowAnyModel ? 'checked' : ''} onchange="updatePolicy('${agent}', 'allowAnyModel', this.checked)">
+              Allow any model
+            </label>
+          </div>
+          
+          <div style="margin-bottom: 15px;">
+            <label style="display: block; margin-bottom: 8px;">
+              Auto-approve under: $<input 
+                type="number" 
+                value="${policy.autoApproveUnder}" 
+                min="0" 
+                max="1000" 
+                step="5"
+                style="width: 80px; padding: 4px;"
+                onchange="updatePolicy('${agent}', 'autoApproveUnder', parseFloat(this.value))"
+              >/day
+            </label>
+          </div>
+          
+          ${!policy.allowAnyModel ? `
+          <div style="margin-bottom: 15px;">
+            <label style="display: block; margin-bottom: 8px; color: #999;">Allowed Models:</label>
+            <div style="background: #0a0e27; padding: 10px; border-radius: 4px; max-height: 150px; overflow-y: auto;">
+              ${serviceList.map(s => `
+                <label style="display: block; margin-bottom: 5px; color: #999;">
+                  <input 
+                    type="checkbox" 
+                    ${policy.allowedModels && policy.allowedModels.includes(s.service_name) ? 'checked' : ''}
+                    onchange="toggleAllowedModel('${agent}', '${s.service_name}', this.checked)"
+                  >
+                  ${s.service_name}
+                </label>
+              `).join('')}
+            </div>
+          </div>
+          ` : ''}
+          
+          <div style="margin-bottom: 15px;">
+            <label style="display: block; margin-bottom: 8px; color: #999;">Blocked Models:</label>
+            <div style="background: #0a0e27; padding: 10px; border-radius: 4px; max-height: 150px; overflow-y: auto;">
+              ${serviceList.map(s => `
+                <label style="display: block; margin-bottom: 5px; color: #999;">
+                  <input 
+                    type="checkbox" 
+                    ${policy.blockedModels && policy.blockedModels.includes(s.service_name) ? 'checked' : ''}
+                    onchange="toggleBlockedModel('${agent}', '${s.service_name}', this.checked)"
+                  >
+                  ${s.service_name}
+                </label>
+              `).join('')}
+            </div>
+          </div>
+          
+          <button onclick="savePolicy('${agent}')" style="padding: 8px 16px; background: #4caf50; color: white; border: none; border-radius: 4px; cursor: pointer;">
+            Save Policy
+          </button>
+        </div>
+      `;
+    }).join('');
+    
+    const content = `
+      <div class="section">
+        <h2>🔧 Agent Override Policies</h2>
+        <p style="color: #999; margin-bottom: 20px;">Configure automatic approval thresholds and allowed models for each agent</p>
+        
+        <div id="policies-container">
+          ${policyForms}
+        </div>
+      </div>
+      
+      <script>
+        function updatePolicy(agent, field, value) {
+          console.log('Updated ' + agent + ' ' + field + ' = ' + value);
+        }
+        
+        function toggleAllowedModel(agent, model, checked) {
+          console.log('Toggled allowed model for ' + agent + ': ' + model + ' = ' + checked);
+        }
+        
+        function toggleBlockedModel(agent, model, checked) {
+          console.log('Toggled blocked model for ' + agent + ': ' + model + ' = ' + checked);
+        }
+        
+        function savePolicy(agent) {
+          alert('Policy saved for ' + agent + ' (implementation pending)');
+        }
+      </script>
+    `;
+    
+    return renderHTML('Policies', content);
+  } catch (error) {
+    console.error('Policy page error:', error);
+    return renderHTML('Error', `<div class="error">Error loading policies: ${error.message}</div>`);
+  }
+}
 
 async function overviewPage() {
   const stats = await db.query(`
@@ -453,6 +593,9 @@ const server = http.createServer(async (req, res) => {
         break;
       case '/costs':
         html = await costsPage();
+        break;
+      case '/policies':
+        html = await policiesPage();
         break;
       default:
         res.writeHead(404);

@@ -825,6 +825,56 @@ const rpcMethods = {
       return { error: 'Missing agent_id or task_type' };
     }
     return await selectOptimalModel(agent_id, task_type, complexity, is_urgent);
+  },
+  
+  // Policy management
+  'model.getPolicy': async (params) => {
+    const { agent_id } = params;
+    
+    if (!agent_id) {
+      return { error: 'Missing agent_id' };
+    }
+    
+    const policy = getOverridePolicy(agent_id);
+    return {
+      agent_id,
+      policy
+    };
+  },
+  
+  'model.listPolicies': async (params) => {
+    const policies = {};
+    const agentIds = ['flint', 'clio'];
+    
+    for (const agentId of agentIds) {
+      policies[agentId] = getOverridePolicy(agentId);
+    }
+    
+    return { policies };
+  },
+  
+  'model.updatePolicy': async (params) => {
+    const { agent_id, policy } = params;
+    
+    if (!agent_id || !policy) {
+      return { error: 'Missing agent_id or policy' };
+    }
+    
+    // Log to audit trail
+    await logAudit('policy_updated', 'admin', null, null, {
+      agent_id,
+      policy,
+      updated_at: new Date().toISOString()
+    });
+    
+    console.log(`[model-router] Policy updated for ${agent_id}:`, policy);
+    
+    return {
+      status: 'updated',
+      agent_id,
+      policy,
+      note: 'Policy updated (full persistence in config file planned)'
+    };
   }
 };
 
