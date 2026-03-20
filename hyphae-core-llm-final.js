@@ -233,6 +233,12 @@ const rpcMethods = {
   'model.select_optimal': async (params) => {
     return await callModelRouter('model.selectOptimal', params);
   },
+  'model.request_override': async (params) => {
+    return await callModelRouter('model.requestOverride', params);
+  },
+  'model.check_override_policy': async (params) => {
+    return await callModelRouter('model.checkOverridePolicy', params);
+  },
   'model.pending_approvals': async (params) => {
     return { message: 'Check admin dashboard at http://localhost:3104/approvals' };
   }

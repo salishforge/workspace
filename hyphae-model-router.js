@@ -529,6 +529,107 @@ async function notifyAgent(agentId, message) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Override Policy Evaluation
+// ─────────────────────────────────────────────────────────────
+
+function getOverridePolicy(agentId) {
+  // Per-agent override policies
+  const policies = {
+    'flint': {
+      allowAnyModel: true,
+      autoApproveUnder: 50.0,
+      blockedModels: []
+    },
+    'clio': {
+      allowAnyModel: false,
+      allowedModels: ['claude-max-100', 'gemini-api-pro', 'claude-api-sonnet'],
+      autoApproveUnder: 20.0,
+      blockedModels: ['claude-api-opus']
+    }
+  };
+  
+  return policies[agentId] || {
+    allowAnyModel: false,
+    allowedModels: ['gemini-api-flash', 'gemini-api-pro'],
+    autoApproveUnder: 5.0,
+    blockedModels: ['claude-api-opus', 'claude-max-100']
+  };
+}
+
+function evaluateOverrideApproval(policy, serviceName, limitStatus) {
+  // Handle error case
+  if (limitStatus.error) {
+    return {
+      allowed: false,
+      reason: limitStatus.error,
+      autoApproved: false
+    };
+  }
+  
+  // Check if model is blocked
+  if (policy.blockedModels && policy.blockedModels.includes(serviceName)) {
+    return {
+      allowed: false,
+      reason: `${serviceName} is not allowed for this agent`,
+      autoApproved: false,
+      suggestedService: 'gemini-api-pro'
+    };
+  }
+  
+  // Check if model is allowed (if allowAnyModel is false)
+  if (!policy.allowAnyModel && policy.allowedModels) {
+    if (!policy.allowedModels.includes(serviceName)) {
+      return {
+        allowed: false,
+        reason: `${serviceName} not in allowed models list`,
+        autoApproved: false,
+        suggestedService: policy.allowedModels[0]
+      };
+    }
+  }
+  
+  // Check if over hard stop limit
+  if (limitStatus.status === 'hard_stop' || limitStatus.is_blocked) {
+    return {
+      allowed: false,
+      reason: 'Daily limit already exceeded for this service',
+      autoApproved: false,
+      suggestedService: 'gemini-api-flash'
+    };
+  }
+  
+  // Calculate remaining budget from percentage
+  // limitStatus contains daily_usage_pct, which is the percentage used
+  const usagePercent = parseFloat(limitStatus.daily_usage_pct) / 100;
+  const autoApproveThreshold = policy.autoApproveUnder || 50.0;
+  
+  // If usage is low, approve automatically
+  if (usagePercent < 0.5) {  // 50% of auto-approval threshold not reached
+    return {
+      allowed: true,
+      reason: `Within auto-approval threshold (${limitStatus.daily_usage_pct}% used)`,
+      autoApproved: true
+    };
+  }
+  
+  // If usage is moderate, approve but note it
+  if (usagePercent < 0.9) {  // Less than 90% of threshold
+    return {
+      allowed: true,
+      reason: `Approved but approaching limit (${limitStatus.daily_usage_pct}% used)`,
+      autoApproved: false,
+      requiresApproval: true
+    };
+  }
+  
+  return {
+    allowed: false,
+    reason: `Over limit (${limitStatus.daily_usage_pct}% used)`,
+    autoApproved: false
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
 // Audit Logging
 // ─────────────────────────────────────────────────────────────
 
@@ -558,6 +659,113 @@ const rpcMethods = {
        WHERE is_active = true`
     );
     return { services: result.rows };
+  },
+  
+  // Override request
+  'model.requestOverride': async (params) => {
+    const { agent_id, service_id, reason, duration } = params;
+    
+    if (!agent_id || !service_id) {
+      return { error: 'Missing agent_id or service_id' };
+    }
+    
+    try {
+      // Validate service exists
+      const serviceResult = await db.query(
+        'SELECT service_name FROM hyphae_model_services WHERE service_id = $1',
+        [service_id]
+      );
+      
+      if (serviceResult.rows.length === 0) {
+        return { error: 'Service not found' };
+      }
+      
+      const serviceName = serviceResult.rows[0].service_name;
+      
+      // Check limit status
+      const limitStatus = await getLimitStatus(agent_id, service_id);
+      
+      // Get override policy for agent
+      const policy = getOverridePolicy(agent_id);
+      
+      // Evaluate if override should be approved
+      const approval = evaluateOverrideApproval(policy, serviceName, limitStatus);
+      
+      if (!approval.allowed) {
+        return {
+          error: approval.reason,
+          suggested_alternative: approval.suggestedService
+        };
+      }
+      
+      // Get API key
+      const keyResult = await getApiKey(agent_id, service_id);
+      if (keyResult.error) {
+        return { error: 'No approved API key for this service' };
+      }
+      
+      // Log override to audit
+      await logAudit('override_approved', agent_id, service_id, null, {
+        reason,
+        duration,
+        auto_approved: approval.autoApproved,
+        limit_status: limitStatus.max_usage_pct
+      });
+      
+      const expiresAt = new Date();
+      if (duration === 'single-task') {
+        expiresAt.setHours(expiresAt.getHours() + 1);
+      } else if (duration === '24-hours') {
+        expiresAt.setDate(expiresAt.getDate() + 1);
+      }
+      
+      return {
+        status: 'approved',
+        service_id,
+        service_name: serviceName,
+        key_value: keyResult.key_value,
+        endpoint: keyResult.service_endpoint,
+        reason_for_approval: approval.reason,
+        auto_approved: approval.autoApproved,
+        expires_at: expiresAt.toISOString()
+      };
+    } catch (error) {
+      console.error('Override request error:', error);
+      return { error: error.message };
+    }
+  },
+  
+  // Check override policy
+  'model.checkOverridePolicy': async (params) => {
+    const { agent_id, service_id } = params;
+    
+    try {
+      const limitStatus = await getLimitStatus(agent_id, service_id);
+      const policy = getOverridePolicy(agent_id);
+      
+      const service = await db.query(
+        'SELECT service_name FROM hyphae_model_services WHERE service_id = $1',
+        [service_id]
+      );
+      
+      if (service.rows.length === 0) {
+        return { error: 'Service not found' };
+      }
+      
+      const approval = evaluateOverrideApproval(policy, service.rows[0].service_name, limitStatus);
+      
+      return {
+        allowed: approval.allowed,
+        auto_approved: approval.autoApproved,
+        reason: approval.reason,
+        would_exceed_budget: limitStatus.status === 'hard_stop',
+        current_daily_usage: limitStatus.current_daily_usage_usd,
+        daily_limit: 50.0  // Default, can be made configurable
+      };
+    } catch (error) {
+      console.error('Policy check error:', error);
+      return { error: error.message };
+    }
   },
   
   // API key management

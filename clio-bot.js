@@ -107,16 +107,42 @@ async function handleTelegramMessage(req, res) {
   }
 }
 
-// ── LLM Response Generation (with Intelligent Model Router) ──
+// ── LLM Response Generation (with Intelligent Model Router + Overrides) ──
 
 async function generateResponse(userMessage, conversationHistory) {
   try {
-    // Classify task for intelligent routing
-    const taskType = classifyTask(userMessage);
-    const selection = await selectOptimalModel('clio', taskType.type, taskType.complexity);
+    let selection;
+    let selectionMethod = 'automatic';
     
-    if (!selection.error) {
-      console.log(`[clio-bot] ⚡ Router selected ${selection.service_name} (score: ${selection.score})`);
+    // Check for model override request
+    const override = detectModelOverride(userMessage);
+    
+    if (override) {
+      console.log(`[clio-bot] 🔧 Override detected: ${override.type} (${override.model || override.flag})`);
+      selectionMethod = 'override';
+      
+      // Request override from router
+      selection = await requestModelOverride('clio', override.model, override.reason);
+      
+      if (selection.error) {
+        console.log(`[clio-bot] ⚠️ Override denied: ${selection.error}`);
+        console.log(`[clio-bot] Falling back to automatic selection`);
+        selectionMethod = 'fallback';
+        
+        // Fall back to automatic selection
+        const taskType = classifyTask(userMessage);
+        selection = await selectOptimalModel('clio', taskType.type, taskType.complexity, override.isUrgent);
+      } else {
+        console.log(`[clio-bot] ✅ Override approved: ${selection.service_name}`);
+      }
+    } else {
+      // Standard automatic selection
+      const taskType = classifyTask(userMessage);
+      selection = await selectOptimalModel('clio', taskType.type, taskType.complexity);
+      
+      if (!selection.error) {
+        console.log(`[clio-bot] ⚡ Router selected ${selection.service_name} (score: ${selection.score})`);
+      }
     }
     
     // Determine which LLM to use (fallback to default if router unavailable)
@@ -142,6 +168,45 @@ async function generateResponse(userMessage, conversationHistory) {
     console.error('[clio-bot] LLM error:', error.message);
     return `I encountered an error generating a response: ${error.message}`;
   }
+}
+
+// ── Model Override Detection ──
+function detectModelOverride(message) {
+  const text = (message || '').toLowerCase();
+  
+  // Pattern 1: /model <name>
+  const modelMatch = text.match(/\/model\s+([a-z0-9\-]+)/i);
+  if (modelMatch) {
+    return {
+      type: 'explicit',
+      model: modelMatch[1],
+      reason: 'User explicitly requested model'
+    };
+  }
+  
+  // Pattern 2: /urgent or /priority
+  const urgentMatch = text.match(/\/urgent|\/priority|\/asap/i);
+  if (urgentMatch) {
+    return {
+      type: 'flag',
+      flag: urgentMatch[0].toLowerCase(),
+      isUrgent: true,
+      reason: 'User marked task as urgent'
+    };
+  }
+  
+  // Pattern 3: Natural language model mention
+  const modelNames = ['claude-opus', 'claude-sonnet', 'claude-haiku', 'gemini-pro', 'gemini-flash'];
+  const nlMatch = text.match(new RegExp(`\\b(${modelNames.join('|')})\\b`, 'i'));
+  if (nlMatch) {
+    return {
+      type: 'inline',
+      model: nlMatch[1].toLowerCase(),
+      reason: 'Model mentioned in context'
+    };
+  }
+  
+  return null;
 }
 
 // ── Task Classification ──
@@ -188,15 +253,62 @@ function inferModel(serviceName) {
   return getAgentModel('clio');
 }
 
+// ── Model Override Request (via Hyphae Router) ──
+async function requestModelOverride(agentId, modelName, reason) {
+  try {
+    // Map model names to service IDs
+    const serviceMap = {
+      'claude-opus': 'claude-api-opus',
+      'claude-sonnet': 'claude-api-sonnet',
+      'claude-haiku': 'claude-api-haiku',
+      'claude-max': 'claude-max-100',
+      'gemini-pro': 'gemini-api-pro',
+      'gemini-3.1-pro': 'gemini-api-3-1-pro',
+      'gemini-flash': 'gemini-api-flash',
+      'ollama': 'ollama-cloud-pro'
+    };
+    
+    const serviceId = serviceMap[modelName.toLowerCase()];
+    if (!serviceId) {
+      return { error: `Unknown model: ${modelName}` };
+    }
+    
+    const response = await fetch('http://localhost:3100/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: 'model.requestOverride',
+        params: {
+          agent_id: agentId,
+          service_id: serviceId,
+          reason: reason || 'Agent-requested override',
+          duration: 'single-task'
+        },
+        id: Date.now()
+      })
+    });
+    
+    if (!response.ok) {
+      return { error: `Router returned ${response.status}` };
+    }
+    
+    const data = await response.json();
+    return data.result || { error: 'No result' };
+  } catch (error) {
+    console.warn('[clio-bot] Override request failed:', error.message);
+    return { error: error.message };
+  }
+}
+
 // ── Intelligent Model Selection (via Hyphae Router) ──
-async function selectOptimalModel(agentId, taskType, complexity) {
+async function selectOptimalModel(agentId, taskType, complexity, isUrgent = false) {
   try {
     const response = await fetch('http://localhost:3100/rpc', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         method: 'model.select_optimal',
-        params: { agent_id: agentId, task_type: taskType, complexity },
+        params: { agent_id: agentId, task_type: taskType, complexity, is_urgent: isUrgent },
         id: Date.now()
       })
     });
