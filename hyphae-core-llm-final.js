@@ -13,7 +13,6 @@ import crypto from 'crypto';
 import pg from 'pg';
 import fs from 'fs';
 import { EventEmitter } from 'events';
-import * as serviceRegistry from './service-registry-methods.js';
 
 // ── LLM Integration (inline for reliability) ──
 
