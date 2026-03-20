@@ -356,8 +356,11 @@ async function requestHandler(req, res) {
     req.on('end', async () => {
       if (body.length > MAX_BODY_SIZE) return; // Already responded
       
+      let id;
       try {
-        const { jsonrpc, method, params, id } = JSON.parse(body);
+        const parsed = JSON.parse(body);
+        id = parsed.id;
+        const { jsonrpc, method, params } = parsed;
 
         let result;
         switch (method) {
