@@ -14,6 +14,7 @@
  */
 
 import https from 'https';
+import http from 'http';
 import crypto from 'crypto';
 import pg from 'pg';
 import fs from 'fs';
@@ -299,14 +300,23 @@ function verifyBearerToken(req) {
 }
 
 // ── HTTP Server ──
-const tlsOptions = process.env.HYPHAE_SKIP_TLS ? null : {
-  key: fs.readFileSync(process.env.HYPHAE_TLS_KEY || '/etc/hyphae/key.pem', 'utf-8').catch(() => null),
-  cert: fs.readFileSync(process.env.HYPHAE_TLS_CERT || '/etc/hyphae/cert.pem', 'utf-8').catch(() => null)
-};
+// Load TLS certificates if available (development uses http)
+let tlsOptions = null;
+if (!process.env.HYPHAE_SKIP_TLS) {
+  try {
+    tlsOptions = {
+      key: fs.readFileSync(process.env.HYPHAE_TLS_KEY || '/etc/hyphae/key.pem', 'utf-8'),
+      cert: fs.readFileSync(process.env.HYPHAE_TLS_CERT || '/etc/hyphae/cert.pem', 'utf-8')
+    };
+  } catch {
+    console.warn('[hyphae] TLS files not found, using HTTP');
+  }
+}
 
-const createServer = tlsOptions && tlsOptions.key && tlsOptions.cert ? https.createServer : require('http').createServer;
-const serverConfig = tlsOptions && tlsOptions.key && tlsOptions.cert ? [tlsOptions] : [];
-const server = createServer(...serverConfig, async (req, res) => {
+// Create server (use https if certs available, otherwise http)
+const server = tlsOptions ? https.createServer(tlsOptions, requestHandler) : http.createServer(requestHandler);
+
+async function requestHandler(req, res) {
   res.setHeader('Content-Type', 'application/json');
 
   // Unauthenticated endpoints
@@ -379,7 +389,7 @@ const server = createServer(...serverConfig, async (req, res) => {
 
   res.writeHead(404);
   res.end(JSON.stringify({ error: 'Not found' }));
-});
+}
 
 // ── Initialization ──
 async function initializeDatabase() {
