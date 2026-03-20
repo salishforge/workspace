@@ -183,16 +183,35 @@ export async function generateAgentResponse(agentId, userMessage, conversationHi
   }
 }
 
-// ── Model Selection ──
+// ── Model Selection (with per-agent override support) ──
+
+// Store current model preference per agent (in production, use database)
+const agentModelPreference = {
+  flint: { provider: 'google', name: 'gemini-2.5-pro' },  // Default: cheaper Gemini
+  clio: { provider: 'google', name: 'gemini-2.5-pro' }
+};
 
 function getAgentModel(agentId) {
-  // Default models (claude-opus-4-1 is the latest available)
-  const modelConfig = {
-    flint: { provider: 'anthropic', name: 'claude-opus-4-1' },
-    clio: { provider: 'anthropic', name: 'claude-opus-4-1' }
+  return agentModelPreference[agentId] || { provider: 'google', name: 'gemini-2.5-pro' };
+}
+
+function setAgentModel(agentId, modelName) {
+  // Map common model names to config
+  const modelMap = {
+    'gemini': { provider: 'google', name: 'gemini-2.5-pro' },
+    'gemini-2.5-pro': { provider: 'google', name: 'gemini-2.5-pro' },
+    'claude': { provider: 'anthropic', name: 'claude-opus-4-1' },
+    'claude-opus': { provider: 'anthropic', name: 'claude-opus-4-1' },
+    'claude-opus-4-1': { provider: 'anthropic', name: 'claude-opus-4-1' },
+    'haiku': { provider: 'anthropic', name: 'claude-3-5-haiku-20241022' }
   };
   
-  return modelConfig[agentId] || { provider: 'anthropic', name: 'claude-opus-4-1' };
+  const model = modelMap[modelName.toLowerCase()];
+  if (model) {
+    agentModelPreference[agentId] = model;
+    return `✅ Model updated to ${modelName}`;
+  }
+  return `❌ Unknown model: ${modelName}. Available: gemini, claude-opus, haiku`;
 }
 
 function getAgentSystemPrompt(agentId) {
@@ -238,19 +257,27 @@ async function callGemini(agentId, model, systemPrompt, messages) {
     return `Gemini API not configured for ${agentId}. Please set ${agentId.toUpperCase()}_GEMINI_API_KEY or GEMINI_API_KEY.`;
   }
   
-  // Convert Claude message format to Gemini format
-  const contents = messages.map(msg => ({
+  // For Gemini, we prepend system prompt to first message
+  const fullMessages = [...messages];
+  if (fullMessages.length === 0) {
+    fullMessages.push({ role: 'user', content: 'Hello' });
+  }
+  
+  // Add system prompt context to first message
+  fullMessages[0].content = `[System: ${systemPrompt}]\n\n${fullMessages[0].content}`;
+  
+  // Convert to Gemini format
+  const contents = fullMessages.map(msg => ({
     role: msg.role === 'user' ? 'user' : 'model',
     parts: [{ text: msg.content }]
   }));
+  
+  const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent';
   
   const response = await fetch(GEMINI_API + '?key=' + apiKey, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      system_instruction: {
-        parts: [{ text: systemPrompt }]
-      },
       contents: contents,
       generationConfig: {
         maxOutputTokens: 1024,
@@ -310,6 +337,7 @@ export async function getConversationHistory(agentId, humanId, pool, limit = 20)
 async function handleSlashCommand(agentId, command, pool) {
   const parts = command.split(' ');
   const cmd = parts[0].toLowerCase();
+  const arg = parts.slice(1).join(' ');
   
   switch (cmd) {
     case '/status':
@@ -319,18 +347,21 @@ async function handleSlashCommand(agentId, command, pool) {
       return getAvailableModels(agentId);
     
     case '/model':
-      const newModel = parts[1];
-      return setAgentModel(agentId, newModel);
+      if (!arg) {
+        const current = getAgentModel(agentId);
+        return `Current model: ${current.name}\nUsage: /model <name>\nAvailable: gemini, claude-opus, haiku`;
+      }
+      return setAgentModel(agentId, arg);
     
     case '/history':
-      const count = parseInt(parts[1]) || 5;
-      return `I can see the last ${count} messages in our conversation. /history [n] shows message count.`;
+      const count = parseInt(arg) || 5;
+      return `I can see the last ${count} messages in our conversation.`;
     
     case '/consolidate':
       if (agentId === 'clio') {
-        return 'Memory consolidation ready. I would run a cycle to compress episodic memories. How many days back should I consolidate?';
+        return '✅ Memory consolidation ready. I can compress episodic memories and organize working memory. What timeline would you prefer?';
       }
-      return 'Memory consolidation is Clio\'s domain. I can explain the architecture.';
+      return 'Memory consolidation is Clio\'s domain. I can explain how it works though.';
     
     case '/help':
       return getHelpText(agentId);
@@ -377,12 +408,7 @@ function getAvailableModels(agentId) {
   };
   
   const available = models[agentId] || models.flint;
-  return `Available models:\n${available.map((m, i) => `${i + 1}. ${m}`).join('\n')}\n\nUse /model <name> to switch. Current: claude-3-5-sonnet`;
-}
-
-function setAgentModel(agentId, model) {
-  // In production, this would save to database
-  return `Model updated to ${model}. (Note: this would be persisted in production)`;
+  return `Available models:\n${available.map((m, i) => `${i + 1}. ${m}`).join('\n')}\n\nUse /model <name> to switch.`;
 }
 
 function getHelpText(agentId) {
