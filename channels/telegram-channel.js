@@ -5,7 +5,8 @@
  * Abstracted so other channels (Discord, Slack, WhatsApp) can be swapped in
  */
 
-import fetch from 'node-fetch';
+// Use built-in fetch (Node 18+) instead of node-fetch
+// import fetch from 'node-fetch';
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || 'NOT_CONFIGURED';
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
