@@ -186,13 +186,13 @@ export async function generateAgentResponse(agentId, userMessage, conversationHi
 // ── Model Selection ──
 
 function getAgentModel(agentId) {
-  // Default models
+  // Default models (claude-opus-4-1 is the latest available)
   const modelConfig = {
-    flint: { provider: 'anthropic', name: 'claude-3-5-sonnet-20241022' },
-    clio: { provider: 'anthropic', name: 'claude-3-5-sonnet-20241022' }
+    flint: { provider: 'anthropic', name: 'claude-opus-4-1' },
+    clio: { provider: 'anthropic', name: 'claude-opus-4-1' }
   };
   
-  return modelConfig[agentId] || { provider: 'anthropic', name: 'claude-3-5-sonnet-20241022' };
+  return modelConfig[agentId] || { provider: 'anthropic', name: 'claude-opus-4-1' };
 }
 
 function getAgentSystemPrompt(agentId) {
