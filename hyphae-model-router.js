@@ -7,9 +7,12 @@
  * March 20, 2026
  */
 
-const crypto = require('crypto');
-const { Pool } = require('pg');
-const fetch = require('node-fetch');
+import crypto from 'crypto';
+import pg from 'pg';
+import fetch from 'node-fetch';
+import http from 'http';
+
+const { Pool } = pg;
 
 // Configuration
 const CONFIG = {
@@ -621,8 +624,6 @@ const rpcMethods = {
 // HTTP Server
 // ─────────────────────────────────────────────────────────────
 
-const http = require('http');
-
 const server = http.createServer(async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -675,22 +676,8 @@ async function startup() {
     const result = await db.query('SELECT NOW()');
     console.log('✅ Database connected');
     
-    // Initialize schema
-    console.log('📊 Initializing database schema...');
-    const schema = require('fs').readFileSync('./hyphae-model-database.sql', 'utf-8');
-    const statements = schema.split(';').filter(s => s.trim());
-    
-    for (const stmt of statements) {
-      try {
-        await db.query(stmt);
-      } catch (error) {
-        if (!error.message.includes('already exists')) {
-          console.warn('Schema statement warning:', error.message.slice(0, 100));
-        }
-      }
-    }
-    
-    console.log('✅ Schema initialized');
+    // Schema already initialized separately via psql
+    console.log('✅ Schema verified (pre-initialized)');
     
     // Start HTTP server
     const PORT = process.env.PORT || 3105;

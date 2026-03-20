@@ -371,7 +371,7 @@ class IntelligentRouter {
   }
 }
 
-module.exports = {
+export {
   TaskClassifier,
   RouterScorer,
   IntelligentRouter

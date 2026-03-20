@@ -5,7 +5,7 @@
  * Provides transparent routing and limit management for agents
  */
 
-const fetch = require('node-fetch');
+import fetch from 'node-fetch';
 
 // Model Router endpoint
 const MODEL_ROUTER_ENDPOINT = process.env.MODEL_ROUTER_ENDPOINT || 'http://localhost:3105/rpc';
@@ -231,7 +231,7 @@ async function selectAndGetCredentials(agentId, taskType, complexity, isUrgent =
   }
 }
 
-module.exports = {
+export {
   routerRpcMethods,
   callRouter,
   selectAndGetCredentials,

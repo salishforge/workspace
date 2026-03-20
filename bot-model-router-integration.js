@@ -13,7 +13,7 @@
  * const response = await bot.callLLM(prompt, model);
  */
 
-const fetch = require('node-fetch');
+import fetch from 'node-fetch';
 
 class BotWithRouter {
   constructor(config) {
@@ -250,6 +250,6 @@ class BotWithRouter {
   }
 }
 
-module.exports = {
+export {
   BotWithRouter
 };

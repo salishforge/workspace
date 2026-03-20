@@ -13,9 +13,11 @@
  * March 20, 2026
  */
 
-const http = require('http');
-const { Pool } = require('pg');
-const url = require('url');
+import http from 'http';
+import pg from 'pg';
+import url from 'url';
+
+const { Pool } = pg;
 
 const db = new Pool({
   host: process.env.DB_HOST || '100.97.161.7',
