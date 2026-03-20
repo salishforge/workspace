@@ -1,0 +1,803 @@
+{
+  "report_metadata": {
+    "title": "Hyphae + MemForge Security Assessment",
+    "version": "1.0.0",
+    "date": "2026-03-19",
+    "reviewer": "Flint (CTO Security Agent)",
+    "scope": [
+      "nanoclaw-fork/memforge/consolidation/consolidation_agent.js",
+      "nanoclaw-fork/memforge/retrieval/memory_retrieval.js",
+      "hyphae/hyphae-core.js",
+      "hyphae/schema.sql"
+    ],
+    "methodology": "Static code analysis + logical pentest simulation (30+ scenarios)",
+    "summary": {
+      "critical": 3,
+      "high": 5,
+      "medium": 7,
+      "low": 5,
+      "info": 2,
+      "total_vulnerabilities": 20,
+      "overall_risk": "CRITICAL",
+      "production_ready": false,
+      "blocker_for_deployment": true
+    }
+  },
+
+  "vulnerabilities": [
+
+    {
+      "id": "CRIT-001",
+      "title": "Vault decryption not implemented — returns raw ciphertext",
+      "severity": "CRITICAL",
+      "cvss_score": 9.1,
+      "component": "hyphae/hyphae-core.js",
+      "line": 200,
+      "owasp_category": "A4 - Sensitive Data Exposure",
+      "description": "getSecret() fetches the agent's encryption key from hyphae_key_grants but never uses it. The function returns value_encrypted (raw BYTEA) directly with a 'success' audit log entry. The ENCRYPTION_KEY env var is validated at startup but never referenced in any crypto operation. The comment '// In production: decrypt here' confirms this is a known stub — but it is deployed as the live code path.",
+      "evidence": "hyphae-core.js:197-200: keyResult fetched but discarded; return value_encrypted; // In production: decrypt here",
+      "impact": "Vault secrets are effectively stored as encrypted blobs but returned as ciphertext to callers. Any caller who can reach the vault RPC can retrieve encrypted bytes. Combined with CRIT-003 (keys in DB), a DB compromise exposes plaintext secrets.",
+      "remediation": "Implement AES-256-GCM decryption: derive key from master ENCRYPTION_KEY env, decrypt value_encrypted using nonce, return plaintext. Never store master key in DB.",
+      "references": ["CWE-311", "CWE-321"]
+    },
+
+    {
+      "id": "CRIT-002",
+      "title": "Hyphae RPC endpoint has no authentication",
+      "severity": "CRITICAL",
+      "cvss_score": 9.8,
+      "component": "hyphae/hyphae-core.js",
+      "line": 292,
+      "owasp_category": "A2 - Broken Authentication",
+      "description": "The /rpc HTTP endpoint accepts calls to vault.get, service.call, and agent.verify from any client that can reach port 3100. There is no bearer token, API key, mTLS, or any other authentication mechanism on the HTTP transport. verifyAgent() checks that the agentId exists in the DB, but does NOT verify the caller is actually that agent. Any process on the network can call vault.get with any agentId/secretName and receive that agent's (encrypted) secret.",
+      "evidence": "hyphae-core.js:292-326: no auth middleware; params.agentId is caller-supplied and trusted without challenge-response",
+      "impact": "Complete authentication bypass. An attacker on the same network can impersonate any registered agent, access any vault secret, and call any service. This is the primary attack vector for credential theft.",
+      "remediation": "Add HTTP bearer token or API key authentication before parsing body. Implement challenge-response for vault access: require caller to sign a nonce with their private key (Ed25519 public keys are already stored in hyphae_agent_identities). Alternatively, add mTLS at the transport layer.",
+      "references": ["CWE-306", "CWE-287"]
+    },
+
+    {
+      "id": "CRIT-003",
+      "title": "Per-agent encryption keys stored in the same database as encrypted secrets",
+      "severity": "CRITICAL",
+      "cvss_score": 8.7,
+      "component": "hyphae/schema.sql",
+      "line": 48,
+      "owasp_category": "A4 - Sensitive Data Exposure",
+      "description": "hyphae_key_grants stores encryption_key BYTEA in the same PostgreSQL instance as hyphae_secrets. A single DB compromise yields both the ciphertext and the keys needed to decrypt it. The encryption architecture is circular: secrets are 'protected' by keys that are stored alongside them.",
+      "evidence": "schema.sql:48: encryption_key BYTEA NOT NULL; same DB as hyphae_secrets.value_encrypted",
+      "impact": "Database compromise = full secret exposure. Encryption provides no protection if keys and ciphertext coexist in the same storage system.",
+      "remediation": "Store per-agent encryption keys outside the database. Options: (1) Derive per-agent keys from HYPHAE_ENCRYPTION_KEY env + agent_id using HKDF. (2) Use a dedicated KMS (HashiCorp Vault, AWS KMS). (3) Store wrapped keys in a separate, more restricted data store. The hyphae_key_grants table should store key IDs/references only, not key material.",
+      "references": ["CWE-321", "CWE-312"]
+    },
+
+    {
+      "id": "HIGH-001",
+      "title": "consolidation_agent.js fails to start — duplicate const declaration (SyntaxError)",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "component": "nanoclaw-fork/memforge/consolidation/consolidation_agent.js",
+      "lines": [81, 829],
+      "owasp_category": "A9 - Using Components with Known Vulnerabilities (Code Defect)",
+      "description": "consolidationState is declared as const at line 81 and again at line 829 in the same ESM module scope. Similarly, ensureConsolidationStateTable (lines 88, 849) and executeConsolidationStep (lines 107, 869) are declared twice as async functions. In Node.js ESM (type:module in package.json), duplicate const declarations cause a SyntaxError: Identifier has already been declared at module parse time. The module will not load.",
+      "evidence": "Lines 81-86: const consolidationState = {...}; Lines 829-834: const consolidationState = {...}",
+      "impact": "Consolidation agent (sleep cycle) cannot start. Memory consolidation, hot-tier updates, and CLAUDE.md generation are non-functional. The two function duplicates mean the later versions shadow earlier ones, with the consolidation state tracker being split across two objects.",
+      "remediation": "Remove duplicate declarations. Merge the two consolidationState objects (lines 81-86 and 829-834 are nearly identical). Keep the ensureConsolidationStateTable and executeConsolidationStep at lines 849/869 (the more complete versions with trackStepState integration), remove the earlier stubs at 88/107.",
+      "references": ["CWE-398"]
+    },
+
+    {
+      "id": "HIGH-002",
+      "title": "Retrieval access tracking is dead code — hot-tier scoring non-functional",
+      "severity": "HIGH",
+      "cvss_score": 6.5,
+      "component": "nanoclaw-fork/memforge/retrieval/memory_retrieval.js",
+      "lines": [172, 177],
+      "owasp_category": "A10 - Insufficient Logging / Monitoring",
+      "description": "queryByText() caches and returns results at line 172-173, then at lines 177-181 contains unreachable code: trackRetrieval() and a second return results. The trackRetrieval call is never executed. This means memory_retrieval_stats is never updated, hot-tier candidate scoring (queryHotTierCandidates) always returns access_count=0 for all entries, and the frequency-based hot-tier promotion is broken.",
+      "evidence": "memory_retrieval.js:172-181: return results at line 173 makes lines 177-181 unreachable dead code",
+      "impact": "Hot-tier scoring is purely age/embedding based; retrieval frequency signals are lost. Memory system may promote less-useful entries. Audit trail of what was accessed is incomplete.",
+      "remediation": "Move the trackRetrieval call to before the return statement. The corrected order: cache result, fire-and-forget trackRetrieval, then return.",
+      "references": ["CWE-835", "CWE-477"]
+    },
+
+    {
+      "id": "HIGH-003",
+      "title": "No HTTP body size limit — DoS via oversized RPC requests",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "component": "hyphae/hyphae-core.js",
+      "line": 294,
+      "owasp_category": "A1 - Injection / Resource Exhaustion",
+      "description": "The /rpc handler accumulates request body with no size limit: let body = ''; req.on('data', chunk => body += chunk). An attacker can send an arbitrarily large request body, causing memory exhaustion and OOM crash of the Hyphae process.",
+      "evidence": "hyphae-core.js:294: let body = ''; req.on('data', chunk => body += chunk); — no size check",
+      "impact": "Denial of service via OOM. All multi-agent coordination fails when Hyphae goes down.",
+      "remediation": "Add a body size limit (e.g., 1MB). Check accumulated length during 'data' events and respond with 413 Payload Too Large if exceeded.",
+      "references": ["CWE-400", "CWE-770"]
+    },
+
+    {
+      "id": "HIGH-004",
+      "title": "agentId is caller-supplied with no session binding — broken access control on memory retrieval",
+      "severity": "HIGH",
+      "cvss_score": 8.1,
+      "component": "nanoclaw-fork/memforge/retrieval/memory_retrieval.js",
+      "owasp_category": "A3 - Broken Access Control",
+      "description": "All retrieval functions (queryByText, queryGraphNeighbors, queryEntityHistory, queryHotTier, manageMemory, etc.) take agentId as a caller-supplied parameter with no server-side session validation. Any agent that has access to the memory retrieval module can read or modify any other agent's memory by passing an arbitrary agentId. There is no authentication binding the caller's identity to the requested agentId.",
+      "evidence": "memory_retrieval.js:82: export async function queryByText(agentId, ...) — agentId from caller, no verification",
+      "impact": "Agent A can read all of Agent B's memory, modify it, or delete it. In a multi-agent system this is a complete information barrier failure.",
+      "remediation": "Pass a verified session token or signed agentId rather than a plain string. The retrieval module should validate the caller's identity against an auth context before executing queries. At minimum, Hyphae should be the gatekeeper for all retrieval calls and verify agent identity first.",
+      "references": ["CWE-284", "CWE-285"]
+    },
+
+    {
+      "id": "HIGH-005",
+      "title": "Audit log immutability not enforced at database level",
+      "severity": "HIGH",
+      "cvss_score": 7.2,
+      "component": "hyphae/schema.sql",
+      "line": 95,
+      "owasp_category": "A10 - Insufficient Logging / Monitoring",
+      "description": "schema.sql comment says 'Write-only constraint via application (no UPDATE/DELETE allowed)' but there are no database-level constraints enforcing this: no row-level security, no revoked UPDATE/DELETE privileges, no trigger preventing modifications. The only check is CHECK (log_id > 0) which is trivially always true for any valid BIGSERIAL. Any process with database credentials can run UPDATE hyphae_audit_log or DELETE FROM hyphae_audit_log.",
+      "evidence": "schema.sql:95-96: '-- Write-only constraint via application (no UPDATE/DELETE allowed)' — comment only, no enforcement",
+      "impact": "An attacker with DB access (e.g., via SQL injection elsewhere, stolen connection string) can erase audit evidence of their activities. Non-repudiation is broken.",
+      "remediation": "Enforce at DB level: (1) Create a dedicated write-only DB role for Hyphae with only INSERT+SELECT on hyphae_audit_log. (2) Add a PostgreSQL trigger that raises an exception on UPDATE/DELETE. (3) Consider append-only table partitioning. The application user should not have UPDATE/DELETE on this table.",
+      "references": ["CWE-778", "CWE-693"]
+    },
+
+    {
+      "id": "MED-001",
+      "title": "Circuit breaker hypersensitive — single failure opens circuit",
+      "severity": "MEDIUM",
+      "cvss_score": 5.3,
+      "component": "hyphae/hyphae-core.js",
+      "line": 69,
+      "owasp_category": "A3 - Broken Access Control (Availability)",
+      "description": "recordFailure() calculates errorRate = failures / (failures + successes). With 0 successes and 1 failure, errorRate = 1.0 which exceeds the 5% threshold (errorThreshold=5 → 5/100=0.05). This means a single service failure immediately opens the circuit, forcing all subsequent calls into fallback mode for 30 seconds. An attacker who can cause one service failure per window can permanently prevent service calls.",
+      "evidence": "hyphae-core.js:70-78: errorRate = failures/(failures+successes); threshold = 5/100 = 0.05; 1 failure = rate 1.0 > 0.05",
+      "impact": "Circuit breaker DoS: one malicious service call failure per 30 seconds is enough to keep a service in fallback permanently.",
+      "remediation": "Require a minimum number of calls (e.g., 10) in the window before opening. Change condition to: failures >= minimumCallThreshold AND errorRate > threshold. This is standard circuit breaker design (e.g., Netflix Hystrix minimum request volume).",
+      "references": ["CWE-400"]
+    },
+
+    {
+      "id": "MED-002",
+      "title": "No TLS on Hyphae HTTP server — vault traffic in cleartext",
+      "severity": "MEDIUM",
+      "cvss_score": 6.8,
+      "component": "hyphae/hyphae-core.js",
+      "line": 276,
+      "owasp_category": "A4 - Sensitive Data Exposure",
+      "description": "Hyphae uses plain http.createServer(), not https. All RPC traffic including vault.get responses (encrypted secret bytes) traverses the network in cleartext. In a Tailscale-connected environment this is partially mitigated by the VPN overlay, but any attacker who compromises the Tailscale key or is on the local network can intercept vault responses.",
+      "evidence": "hyphae-core.js:276: const server = http.createServer(async (req, res) => {...})",
+      "impact": "Network-level eavesdropping on vault operations, service calls, agent verification responses.",
+      "remediation": "Use https.createServer() with TLS certificates, OR deploy behind an nginx reverse proxy with TLS termination, OR rely exclusively on Tailscale (document this explicitly). At minimum, bind to 127.0.0.1 or the Tailscale interface only, not 0.0.0.0.",
+      "references": ["CWE-319"]
+    },
+
+    {
+      "id": "MED-003",
+      "title": "/metrics endpoint exposes service failure state without auth",
+      "severity": "MEDIUM",
+      "cvss_score": 4.3,
+      "component": "hyphae/hyphae-core.js",
+      "line": 285,
+      "owasp_category": "A4 - Sensitive Data Exposure",
+      "description": "GET /metrics returns all circuit breaker states (service names, state, failure counts, error rates) without any authentication. An attacker can poll this to identify which services are failing, time exploitation attempts during HALF_OPEN windows, and discover internal service names.",
+      "evidence": "hyphae-core.js:285-289: /metrics returns full circuit state to unauthenticated callers",
+      "impact": "Information disclosure: service topology and failure state visible to unauthenticated observers.",
+      "remediation": "Add API key or restrict /metrics to loopback interface. Consider Prometheus push model if external scraping is needed.",
+      "references": ["CWE-200"]
+    },
+
+    {
+      "id": "MED-004",
+      "title": "1-hour retrieval cache serves stale data post-revocation",
+      "severity": "MEDIUM",
+      "cvss_score": 5.0,
+      "component": "nanoclaw-fork/memforge/retrieval/memory_retrieval.js",
+      "line": 69,
+      "owasp_category": "A3 - Broken Access Control",
+      "description": "RetrievalCache has a 1-hour TTL. If an agent is compromised, revoked, and its memory is updated/purged, the cache continues serving the old results for up to 1 hour. Similarly, if a memory vector is deleted (soft-deleted), cached references to it persist.",
+      "evidence": "memory_retrieval.js:69: const retrievalCache = new RetrievalCache(1000, 3600000); // 1-hour TTL",
+      "impact": "Post-revocation, a session holding a reference to the retrieval module can still access stale memory data for 60 minutes. Cache invalidation on revocation events does not exist.",
+      "remediation": "Add cache.clear() or targeted key invalidation when an agent is revoked or memory vectors are mutated. Subscribe to agent revocation events from Hyphae, or reduce TTL significantly (e.g., 5 minutes) for sensitive contexts.",
+      "references": ["CWE-613"]
+    },
+
+    {
+      "id": "MED-005",
+      "title": "No replay attack protection on JSON-RPC requests",
+      "severity": "MEDIUM",
+      "cvss_score": 5.4,
+      "component": "hyphae/hyphae-core.js",
+      "line": 297,
+      "owasp_category": "A2 - Broken Authentication",
+      "description": "The RPC handler has no request timestamp, nonce, or sequence number validation. A captured valid RPC request (e.g., vault.get for a specific secret) can be replayed indefinitely by an attacker with network access. Combined with the lack of HTTP auth (CRIT-002), captured requests are replayable.",
+      "evidence": "hyphae-core.js:297: const { jsonrpc, method, params, id } = JSON.parse(body); — no timestamp/nonce checked",
+      "impact": "Replay attacks allow indefinite re-execution of any previously observed RPC call.",
+      "remediation": "Add a required timestamp field; reject requests older than 30 seconds. Add a nonce with server-side deduplication. This is especially important once proper auth (CRIT-002) is implemented.",
+      "references": ["CWE-294"]
+    },
+
+    {
+      "id": "MED-006",
+      "title": "MEMFORGE_AGENT_ID defaults to 'main' — data mixing risk in multi-tenant deployments",
+      "severity": "MEDIUM",
+      "cvss_score": 4.7,
+      "component": "nanoclaw-fork/memforge/consolidation/consolidation_agent.js",
+      "line": 40,
+      "owasp_category": "A3 - Broken Access Control",
+      "description": "AGENT_ID falls back to 'main' if MEMFORGE_AGENT_ID is not set. If multiple consolidation instances run against the same DB without distinct agent IDs, all events, nodes, edges, and hot-tier entries are written under 'main', causing cross-agent data contamination and potential memory content leakage between agent personas.",
+      "evidence": "consolidation_agent.js:40: const AGENT_ID = process.env.MEMFORGE_AGENT_ID || 'main'",
+      "impact": "In a multi-agent deployment without explicit env configuration, different agents share memory state.",
+      "remediation": "Remove the default fallback or make it a hard startup failure: if (!process.env.MEMFORGE_AGENT_ID) { console.error('MEMFORGE_AGENT_ID required'); process.exit(1); }",
+      "references": ["CWE-284"]
+    },
+
+    {
+      "id": "MED-007",
+      "title": "agent.verify RPC method returns full agent record including capabilities and roles",
+      "severity": "MEDIUM",
+      "cvss_score": 4.3,
+      "component": "hyphae/hyphae-core.js",
+      "line": 308,
+      "owasp_category": "A4 - Sensitive Data Exposure",
+      "description": "The agent.verify RPC method (line 308) calls verifyAgent() which returns the full DB row: SELECT * FROM hyphae_agent_identities. This includes public_key_ed25519, encryption_key_id, roles, capabilities, and timestamps. Any unauthenticated caller can enumerate agent capabilities and roles for any agent_id.",
+      "evidence": "hyphae-core.js:142-143: SELECT * FROM hyphae_agent_identities WHERE agent_id = $1 — full row returned",
+      "impact": "Information disclosure: agent capability enumeration enables targeted attacks (e.g., identify which agent has 'admin' capabilities).",
+      "remediation": "Return only a boolean or minimal response from agent.verify for external callers. Apply field filtering in verifyAgent() for public-facing use. Internal uses (routeRequest, getSecret) can use the full record but should not be exposed via the public RPC.",
+      "references": ["CWE-200"]
+    },
+
+    {
+      "id": "LOW-001",
+      "title": "PostgreSQL connection pool missing max setting on Hyphae",
+      "severity": "LOW",
+      "cvss_score": 3.1,
+      "component": "hyphae/hyphae-core.js",
+      "line": 36,
+      "owasp_category": "A9 - Using Components with Known Vulnerabilities",
+      "description": "new pg.Pool({ connectionString: DB_URL }) has no max setting. Default is 10 concurrent connections. Under high concurrent RPC traffic (especially vault.get calls which do 2 DB queries each), this could exhaust the pool and cause request queuing or timeouts.",
+      "evidence": "hyphae-core.js:36: const pool = new pg.Pool({ connectionString: DB_URL }); — no max",
+      "remediation": "Set max: 10 explicitly and add error handling for pool exhaustion. Monitor pool utilization.",
+      "references": ["CWE-400"]
+    },
+
+    {
+      "id": "LOW-002",
+      "title": "No HTTPS / TLS certificate pinning requirement documented",
+      "severity": "LOW",
+      "cvss_score": 2.6,
+      "component": "hyphae/hyphae-core.js",
+      "owasp_category": "A4 - Sensitive Data Exposure",
+      "description": "The deployment model assumes Tailscale VPN for network security, but this is not documented in code or README. If deployed without Tailscale, the server is exposed on all interfaces without TLS.",
+      "evidence": "No ALLOWED_CIDR or interface binding configuration present",
+      "remediation": "Document required network security posture. Add bind address configuration defaulting to 127.0.0.1 for local-only deployment.",
+      "references": ["CWE-319"]
+    },
+
+    {
+      "id": "LOW-003",
+      "title": "isSafeName allows leading dots — potential hidden file conflicts",
+      "severity": "LOW",
+      "cvss_score": 2.1,
+      "component": "nanoclaw-fork/memforge/consolidation/consolidation_agent.js",
+      "line": 132,
+      "owasp_category": "A1 - Injection",
+      "description": "isSafeName regex /^[a-zA-Z0-9._-]+$/ allows names starting with a dot (e.g., .hidden). Combined with isWithinRoot(), path traversal is prevented, but hidden file names could cause unexpected behavior in CLAUDE.md generation.",
+      "evidence": "consolidation_agent.js:132-133: isSafeName allows dots at start of name",
+      "remediation": "Change regex to /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/ to prevent leading dots.",
+      "references": ["CWE-22"]
+    },
+
+    {
+      "id": "LOW-004",
+      "title": "consolidation_step_state table defined in both consolidation_agent.js and schema.sql",
+      "severity": "LOW",
+      "cvss_score": 2.0,
+      "component": "multiple",
+      "owasp_category": "A9 - Using Components with Known Vulnerabilities",
+      "description": "The consolidation_step_state table is defined inline in consolidation_agent.js (CREATE TABLE IF NOT EXISTS) and also in schema.sql. Schema drift risk: the two definitions could diverge, with the runtime CREATE IF NOT EXISTS shadowing the canonical schema definition.",
+      "remediation": "Remove inline CREATE TABLE from consolidation_agent.js; manage schema exclusively through schema files.",
+      "references": []
+    },
+
+    {
+      "id": "LOW-005",
+      "title": "JSON-RPC id field not validated for type",
+      "severity": "LOW",
+      "cvss_score": 2.3,
+      "component": "hyphae/hyphae-core.js",
+      "line": 297,
+      "owasp_category": "A1 - Injection",
+      "description": "The id field from the RPC request body is passed directly to the response without type checking. Per JSON-RPC 2.0 spec, id should be string, number, or null. An object id could cause unexpected serialization behavior.",
+      "remediation": "Validate id is a string, number, or null before echoing back.",
+      "references": ["CWE-20"]
+    }
+  ],
+
+  "pentest_scenarios": [
+    {
+      "id": "T01",
+      "name": "Agent impersonation — unregistered agent_id",
+      "target": "POST /rpc vault.get",
+      "payload": "{\"jsonrpc\":\"2.0\",\"method\":\"vault.get\",\"params\":{\"agentId\":\"fake_agent\",\"secretName\":\"api_key\"},\"id\":1}",
+      "expected_result": "DENIED — verifyAgent returns null → 500 with 'Agent not found or revoked'",
+      "actual_result": "PASS — correctly denied, audit log written",
+      "pass": true,
+      "notes": "Audit log entry IS written with the fake agentId, which is correct behavior."
+    },
+    {
+      "id": "T02",
+      "name": "Revoked agent vault access",
+      "target": "POST /rpc vault.get",
+      "payload": "{...agentId: 'revoked_agent'...} where revoked_at IS NOT NULL",
+      "expected_result": "DENIED — verifyAgent checks revoked_at",
+      "actual_result": "PASS — hyphae-core.js:153: if (!agent.is_active || agent.revoked_at) return null",
+      "pass": true
+    },
+    {
+      "id": "T03",
+      "name": "Authorized agent, non-existent secret",
+      "target": "POST /rpc vault.get",
+      "payload": "{...agentId: 'valid_agent', secretName: 'does_not_exist'...}",
+      "expected_result": "NOTFOUND — throws 'Secret not found'",
+      "actual_result": "PASS — hyphae-core.js:179-181: correct notfound handling with audit log",
+      "pass": true
+    },
+    {
+      "id": "T04",
+      "name": "Vault decryption returns plaintext",
+      "target": "POST /rpc vault.get with valid agentId + secretName",
+      "expected_result": "Decrypted plaintext secret returned",
+      "actual_result": "FAIL — CRIT-001: raw value_encrypted bytes returned, no decryption occurs. Comment 'In production: decrypt here' confirms this is a stub.",
+      "pass": false,
+      "vulnerability_ref": "CRIT-001"
+    },
+    {
+      "id": "T05",
+      "name": "Agent impersonation — read another agent's secret",
+      "target": "POST /rpc vault.get",
+      "payload": "{...agentId: 'target_agent'...} from a different caller process",
+      "expected_result": "DENIED — caller should prove they ARE target_agent",
+      "actual_result": "FAIL — CRIT-002: no caller authentication, any process can supply any agentId and retrieve secrets",
+      "pass": false,
+      "vulnerability_ref": "CRIT-002"
+    },
+    {
+      "id": "T06",
+      "name": "SQL injection in agentId parameter (vault.get)",
+      "target": "POST /rpc vault.get",
+      "payload": "{...agentId: \"' OR '1'='1\", secretName: \"test\"...}",
+      "expected_result": "No SQL injection — parameterized query",
+      "actual_result": "PASS — hyphae-core.js:143: SELECT * FROM ... WHERE agent_id = $1 — parameterized",
+      "pass": true
+    },
+    {
+      "id": "T07",
+      "name": "SQL injection in secretName parameter",
+      "target": "POST /rpc vault.get",
+      "payload": "{...secretName: \"'; DROP TABLE hyphae_secrets; --\"...}",
+      "expected_result": "No SQL injection — parameterized",
+      "actual_result": "PASS — hyphae-core.js:175: ... secret_name = $2 — parameterized",
+      "pass": true
+    },
+    {
+      "id": "T08",
+      "name": "SQL injection in queryByText agentRoles",
+      "target": "memory_retrieval.js queryByText()",
+      "payload": "agentRoles = [\"' OR '1'='1\"]",
+      "expected_result": "No injection — role filter uses $i placeholders",
+      "actual_result": "PASS — memory_retrieval.js:101-103: agentRoles.map((_, i) => '$${i+5}') — all parameterized",
+      "pass": true
+    },
+    {
+      "id": "T09",
+      "name": "Service call without required capability",
+      "target": "POST /rpc service.call",
+      "payload": "{...agentId: 'valid_agent', serviceName: 'admin_service'...} where agent lacks capability",
+      "expected_result": "DENIED — capability check fails",
+      "actual_result": "PASS — hyphae-core.js:217-220: capabilities.includes(serviceName) check enforced",
+      "pass": true
+    },
+    {
+      "id": "T10",
+      "name": "Privilege escalation — inject capabilities via service.call request body",
+      "target": "POST /rpc service.call",
+      "payload": "{...params: {agentId: 'agent', serviceName: 'admin', capabilities: ['admin']}...}",
+      "expected_result": "Capabilities read from DB, not request body",
+      "actual_result": "PASS — capabilities fetched from agent DB record, request params cannot override",
+      "pass": true
+    },
+    {
+      "id": "T11",
+      "name": "Circuit breaker DoS — single failure opens circuit",
+      "target": "CircuitBreaker.recordFailure()",
+      "action": "Trigger one service failure with no prior successes",
+      "expected_result": "Circuit should stay CLOSED with low volumes",
+      "actual_result": "FAIL — MED-001: errorRate = 1/(1+0) = 1.0 > 0.05 → circuit opens on first failure",
+      "pass": false,
+      "vulnerability_ref": "MED-001"
+    },
+    {
+      "id": "T12",
+      "name": "Circuit breaker recovery — HALF_OPEN to CLOSED",
+      "target": "CircuitBreaker state machine",
+      "action": "After halfOpenDelayMs, send 4 successful calls",
+      "expected_result": "Circuit transitions OPEN → HALF_OPEN → CLOSED",
+      "actual_result": "PASS — hyphae-core.js:58-59: 4 successes in HALF_OPEN triggers CLOSED transition",
+      "pass": true
+    },
+    {
+      "id": "T13",
+      "name": "Audit log tamper — UPDATE via direct DB access",
+      "target": "hyphae_audit_log table directly",
+      "action": "UPDATE hyphae_audit_log SET status='success' WHERE status='denied'",
+      "expected_result": "DENIED by DB-level constraint",
+      "actual_result": "FAIL — HIGH-005: no DB-level protection; application comment only",
+      "pass": false,
+      "vulnerability_ref": "HIGH-005"
+    },
+    {
+      "id": "T14",
+      "name": "Audit log tamper — DELETE specific entries",
+      "target": "hyphae_audit_log table directly",
+      "action": "DELETE FROM hyphae_audit_log WHERE agent_id='attacker_id'",
+      "expected_result": "DENIED by DB-level constraint",
+      "actual_result": "FAIL — HIGH-005: no DB constraint prevents DELETE",
+      "pass": false,
+      "vulnerability_ref": "HIGH-005"
+    },
+    {
+      "id": "T15",
+      "name": "Unauthenticated /metrics access",
+      "target": "GET /metrics",
+      "expected_result": "Denied without auth token",
+      "actual_result": "FAIL — MED-003: returns full circuit breaker state to any caller",
+      "pass": false,
+      "vulnerability_ref": "MED-003"
+    },
+    {
+      "id": "T16",
+      "name": "Large body DoS on /rpc",
+      "target": "POST /rpc",
+      "payload": "100MB request body",
+      "expected_result": "413 Payload Too Large",
+      "actual_result": "FAIL — HIGH-003: no size limit, body accumulated until OOM",
+      "pass": false,
+      "vulnerability_ref": "HIGH-003"
+    },
+    {
+      "id": "T17",
+      "name": "Path traversal in group folder names",
+      "target": "ingestConversationArchives()",
+      "action": "Create groups/../secret_dir/conversations/ directory structure",
+      "expected_result": "Traversal blocked",
+      "actual_result": "PASS — isSafeName() rejects '..' and isWithinRoot() validates resolved path",
+      "pass": true
+    },
+    {
+      "id": "T18",
+      "name": "Malformed JSONL file injection",
+      "target": "ingestSessionTranscripts()",
+      "action": "Insert malformed JSON line in .jsonl transcript file",
+      "expected_result": "Error caught per-line, processing continues",
+      "actual_result": "PASS — parseTranscriptJsonl catch block silently skips malformed lines",
+      "pass": true
+    },
+    {
+      "id": "T19",
+      "name": "Cross-agent memory read via queryByText",
+      "target": "memory_retrieval.js queryByText()",
+      "action": "Call queryByText('victim_agent', ...) from unauthorized caller",
+      "expected_result": "DENIED — caller must be authenticated as victim_agent",
+      "actual_result": "FAIL — HIGH-004: no session binding on agentId parameter",
+      "pass": false,
+      "vulnerability_ref": "HIGH-004"
+    },
+    {
+      "id": "T20",
+      "name": "Cross-agent memory DELETE via manageMemory",
+      "target": "memory_retrieval.js manageMemory() delete operation",
+      "action": "DELETE with another agent's memoryId",
+      "expected_result": "Blocked — WHERE agent_id = $1 enforces ownership",
+      "actual_result": "PASS — memory_retrieval.js:447: WHERE id = $2 AND agent_id = $1 — ownership enforced",
+      "pass": true
+    },
+    {
+      "id": "T21",
+      "name": "Cache poisoning — different role sets",
+      "target": "RetrievalCache in queryByText",
+      "action": "Same query, different agentRoles",
+      "expected_result": "Different cache entries for different role sets",
+      "actual_result": "PASS — cacheKey includes agentRoles.join(',') — separate entries per role set",
+      "pass": true
+    },
+    {
+      "id": "T22",
+      "name": "Replay attack on vault.get RPC",
+      "target": "POST /rpc vault.get",
+      "action": "Capture and replay a valid vault.get request",
+      "expected_result": "DENIED after first use",
+      "actual_result": "FAIL — MED-005: no nonce or timestamp check; request can be replayed indefinitely",
+      "pass": false,
+      "vulnerability_ref": "MED-005"
+    },
+    {
+      "id": "T23",
+      "name": "agent.verify information disclosure",
+      "target": "POST /rpc agent.verify",
+      "action": "Call agent.verify with any known agentId without auth",
+      "expected_result": "Returns only boolean or minimal response",
+      "actual_result": "FAIL — MED-007: returns full agent record including roles, capabilities, public key",
+      "pass": false,
+      "vulnerability_ref": "MED-007"
+    },
+    {
+      "id": "T24",
+      "name": "Consolidation agent AGENT_ID spoofing",
+      "target": "consolidation_agent.js startup",
+      "action": "Set MEMFORGE_AGENT_ID=victim_agent in environment before running",
+      "expected_result": "Should require explicit authorization before running as an arbitrary agent",
+      "actual_result": "FAIL — MED-006: accepts any value from env, no validation against registry",
+      "pass": false,
+      "vulnerability_ref": "MED-006"
+    },
+    {
+      "id": "T25",
+      "name": "Consolidation agent startup — duplicate const",
+      "target": "consolidation_agent.js module load",
+      "action": "Start the consolidation agent normally",
+      "expected_result": "Module loads and begins consolidation",
+      "actual_result": "FAIL — HIGH-001: SyntaxError: Identifier 'consolidationState' has already been declared — module fails to load in ESM strict mode",
+      "pass": false,
+      "vulnerability_ref": "HIGH-001"
+    },
+    {
+      "id": "T26",
+      "name": "Hot-tier scoring accuracy",
+      "target": "queryHotTierCandidates() + trackRetrieval()",
+      "action": "Perform 10 queryByText calls, then check access_count in memory_retrieval_stats",
+      "expected_result": "access_count incremented 10 times",
+      "actual_result": "FAIL — HIGH-002: trackRetrieval dead code, access_count always 0",
+      "pass": false,
+      "vulnerability_ref": "HIGH-002"
+    },
+    {
+      "id": "T27",
+      "name": "Post-revocation cache access",
+      "target": "RetrievalCache TTL behavior",
+      "action": "Revoke agent, then immediately query same cache key",
+      "expected_result": "Cache invalidated on revocation",
+      "actual_result": "FAIL — MED-004: cache has no revocation invalidation, serves stale data for up to 1 hour",
+      "pass": false,
+      "vulnerability_ref": "MED-004"
+    },
+    {
+      "id": "T28",
+      "name": "Encryption key in hyphae_key_grants DB dump",
+      "target": "PostgreSQL hyphae_key_grants table",
+      "action": "pg_dump database, inspect hyphae_key_grants.encryption_key",
+      "expected_result": "Key material not stored in DB",
+      "actual_result": "FAIL — CRIT-003: encryption_key BYTEA stored plaintext in DB alongside encrypted secrets",
+      "pass": false,
+      "vulnerability_ref": "CRIT-003"
+    },
+    {
+      "id": "T29",
+      "name": "SQL injection in queryGraphNeighbors nodeId",
+      "target": "memory_retrieval.js queryGraphNeighbors()",
+      "action": "Pass non-integer nodeId containing SQL special characters",
+      "expected_result": "No SQL injection — parameterized",
+      "actual_result": "PASS — placeholders built from frontier array indices, values passed as params array",
+      "pass": true
+    },
+    {
+      "id": "T30",
+      "name": "JSONB deserialization — oversized details in audit log",
+      "target": "auditLog() in hyphae-core.js",
+      "action": "Trigger audit log write with 10MB details object",
+      "expected_result": "Size limit enforced",
+      "actual_result": "INFO — no explicit size limit on details JSONB. PostgreSQL JSONB has no hard size limit (up to ~1GB per value). Risk is low but storage abuse is possible.",
+      "pass": true,
+      "notes": "Low risk given audit log is INSERT-only from trusted code paths"
+    },
+    {
+      "id": "T31",
+      "name": "Dependency vulnerability scan",
+      "target": "pg@8.13.1 (memforge), pg@8.11.0 (hyphae)",
+      "expected_result": "No known CVEs in direct dependencies",
+      "actual_result": "PASS — pg 8.x at these versions has no known critical CVEs as of 2026-03. @anthropic-ai/sdk @0.39.0 and @modelcontextprotocol/sdk @0.5.0 are reasonably current. Recommend running npm audit periodically.",
+      "pass": true,
+      "notes": "Recommend automated npm audit in CI pipeline. No @types/node or zod CVEs known at these versions."
+    }
+  ],
+
+  "owasp_top10_coverage": {
+    "A1_Injection": {
+      "tested": true,
+      "result": "PASS",
+      "notes": "All SQL queries use parameterized statements ($1, $2, etc). Dynamic placeholder construction (archiveEvents, role filters, graph traversal) correctly uses positional params. No string interpolation of user data into SQL. Path traversal protected by isSafeName/isWithinRoot.",
+      "scenarios": ["T06", "T07", "T08", "T17", "T29"]
+    },
+    "A2_Broken_Authentication": {
+      "tested": true,
+      "result": "FAIL",
+      "notes": "CRITICAL: Hyphae RPC has no authentication (CRIT-002). Replay attacks unprotected (MED-005). agentId is self-reported without challenge-response.",
+      "scenarios": ["T01", "T02", "T05", "T22"],
+      "vulnerability_refs": ["CRIT-002", "MED-005"]
+    },
+    "A3_Broken_Access_Control": {
+      "tested": true,
+      "result": "FAIL",
+      "notes": "Memory retrieval agentId has no session binding (HIGH-004). Circuit breaker DoS via single failure (MED-001). Cache not invalidated on revocation (MED-004). Agent identity defaults misconfigured (MED-006). Service capability check is correct (PASS T09, T10).",
+      "scenarios": ["T09", "T10", "T11", "T19", "T20", "T27"],
+      "vulnerability_refs": ["HIGH-004", "MED-001", "MED-004", "MED-006"]
+    },
+    "A4_Sensitive_Data_Exposure": {
+      "tested": true,
+      "result": "FAIL",
+      "notes": "Vault not decrypting secrets (CRIT-001). Keys in DB with ciphertext (CRIT-003). No TLS (MED-002). Agent record fully exposed via agent.verify (MED-007). Memory consolidation agent logs API key provider names (though values are redacted).",
+      "scenarios": ["T04", "T05", "T23", "T28"],
+      "vulnerability_refs": ["CRIT-001", "CRIT-003", "MED-002", "MED-007"]
+    },
+    "A5_XXE": {
+      "tested": false,
+      "result": "N/A",
+      "notes": "No XML parsing anywhere in the codebase. JSON only."
+    },
+    "A6_Security_Misconfiguration": {
+      "tested": true,
+      "result": "FAIL",
+      "notes": "No TLS, no auth on metrics endpoint, default AGENT_ID to 'main', no DB-level audit protection. Test infra stubs in package.json (test scripts are echo placeholders).",
+      "scenarios": ["T15"],
+      "vulnerability_refs": ["MED-002", "MED-003", "MED-006", "HIGH-005"]
+    },
+    "A7_XSS": {
+      "tested": false,
+      "result": "N/A",
+      "notes": "API-only system. No HTML rendering."
+    },
+    "A8_Insecure_Deserialization": {
+      "tested": true,
+      "result": "PASS",
+      "notes": "JSONL parsing uses JSON.parse() with per-line error catching. No eval or Function() used. Model responses are parsed as JSON arrays with strict typing checks. Oversized responses truncated at 1MB.",
+      "scenarios": ["T18", "T31"]
+    },
+    "A9_Known_Vulnerabilities": {
+      "tested": true,
+      "result": "PASS",
+      "notes": "Direct dependencies (pg, @anthropic-ai/sdk, dotenv, @modelcontextprotocol/sdk) are at reasonably current versions with no known critical CVEs. Test scripts are stub echo commands — no actual test suite exists. Recommend adding npm audit to CI.",
+      "scenarios": ["T31"],
+      "vulnerability_refs": ["HIGH-001"]
+    },
+    "A10_Insufficient_Logging": {
+      "tested": true,
+      "result": "PARTIAL",
+      "notes": "Hyphae audit log has correct INSERT-only design intent but no DB enforcement (HIGH-005). Audit entries written for all vault and service operations. Retrieval access tracking broken (HIGH-002). Consolidation step state tracking broken due to duplicate declarations (HIGH-001).",
+      "scenarios": ["T13", "T14", "T26"],
+      "vulnerability_refs": ["HIGH-002", "HIGH-005"]
+    }
+  },
+
+  "risk_assessment": {
+    "overall_risk_level": "CRITICAL",
+    "rationale": "Three critical vulnerabilities exist: the vault is non-functional (no decryption), the RPC endpoint is completely unauthenticated, and encryption keys are stored alongside ciphertext. Additionally, the consolidation agent cannot start due to a JavaScript SyntaxError. The system as written is not deployable in production.",
+    "risk_by_component": {
+      "hyphae-core.js": "CRITICAL — Authentication absent on primary API; vault decryption stub",
+      "schema.sql": "HIGH — Key material in DB; audit log unprotected at DB level",
+      "memory_retrieval.js": "HIGH — No session binding on agentId; dead code breaks hot-tier scoring",
+      "consolidation_agent.js": "HIGH — Module fails to start due to duplicate const declarations"
+    },
+    "attack_scenarios": [
+      {
+        "scenario": "Network-adjacent attacker steals all secrets",
+        "steps": ["1. Connect to port 3100", "2. Enumerate agents via agent.verify", "3. Call vault.get for each agent+secretName combo", "4. Receive encrypted bytes; with DB access also steal decryption keys"],
+        "likelihood": "HIGH",
+        "impact": "CRITICAL",
+        "exploits": ["CRIT-002", "CRIT-001", "CRIT-003"]
+      },
+      {
+        "scenario": "Attacker covers tracks by deleting audit log",
+        "steps": ["1. Gain DB credentials (via stolen connection string)", "2. Execute DELETE FROM hyphae_audit_log"],
+        "likelihood": "MEDIUM",
+        "impact": "HIGH",
+        "exploits": ["HIGH-005"]
+      },
+      {
+        "scenario": "Memory system never consolidates (service outage)",
+        "steps": ["1. Deploy consolidation_agent.js", "2. Node.js throws SyntaxError on module load", "3. Sleep-cycle memory consolidation never runs"],
+        "likelihood": "CERTAIN",
+        "impact": "HIGH",
+        "exploits": ["HIGH-001"]
+      }
+    ]
+  },
+
+  "compliance_checklist": {
+    "encryption_at_rest": {
+      "status": "FAIL",
+      "notes": "Encryption schema exists (AES-256-GCM intended) but decryption not implemented. Key storage architecture is insecure."
+    },
+    "audit_trail": {
+      "status": "PARTIAL",
+      "notes": "Audit log exists with correct INSERT structure. Tamper-proof enforcement missing at DB level. Retrieval audit trail broken (dead code)."
+    },
+    "agent_revocation": {
+      "status": "PARTIAL",
+      "notes": "Hyphae revocation check works (revoked_at + is_active). Retrieval cache does not respect revocation for up to 1 hour."
+    },
+    "authentication": {
+      "status": "FAIL",
+      "notes": "No network-layer authentication on Hyphae RPC. Agent identity relies on caller honesty."
+    },
+    "authorization_rbac": {
+      "status": "PARTIAL",
+      "notes": "Service capability check enforced correctly. Role-based memory filtering implemented in retrieval but caller-supplied roles not verified."
+    },
+    "secret_management": {
+      "status": "FAIL",
+      "notes": "Vault decryption not implemented. Keys colocated with secrets in DB."
+    },
+    "input_validation": {
+      "status": "PASS",
+      "notes": "SQL injection protections solid. Path traversal protected. JSONL parsing safe."
+    },
+    "dependency_management": {
+      "status": "PARTIAL",
+      "notes": "Dependencies reasonably current. No automated npm audit in CI pipeline."
+    }
+  },
+
+  "priority_remediation_order": [
+    {
+      "priority": 1,
+      "vulnerability": "HIGH-001",
+      "action": "Fix SyntaxError in consolidation_agent.js — remove duplicate const consolidationState and merge duplicate function declarations. Blocking: system cannot run.",
+      "effort": "1 hour"
+    },
+    {
+      "priority": 2,
+      "vulnerability": "CRIT-002",
+      "action": "Add authentication to Hyphae /rpc endpoint. At minimum: shared API key validated on each request. Proper fix: Ed25519 challenge-response using existing public keys.",
+      "effort": "1-2 days"
+    },
+    {
+      "priority": 3,
+      "vulnerability": "CRIT-001",
+      "action": "Implement AES-256-GCM decryption in getSecret(). Derive per-agent keys from HYPHAE_ENCRYPTION_KEY using HKDF(master_key, agent_id). Remove key storage from hyphae_key_grants.",
+      "effort": "1 day"
+    },
+    {
+      "priority": 4,
+      "vulnerability": "CRIT-003",
+      "action": "Restructure key management: keys derived from env var, not stored in DB. Migrate existing encrypted secrets.",
+      "effort": "2-3 days"
+    },
+    {
+      "priority": 5,
+      "vulnerability": "HIGH-002",
+      "action": "Move trackRetrieval call to before the return statement in queryByText().",
+      "effort": "15 minutes"
+    },
+    {
+      "priority": 6,
+      "vulnerability": "HIGH-003",
+      "action": "Add body size limit to Hyphae HTTP server.",
+      "effort": "30 minutes"
+    },
+    {
+      "priority": 7,
+      "vulnerability": "HIGH-005",
+      "action": "Create dedicated Hyphae DB role with INSERT+SELECT only on hyphae_audit_log. Add PG trigger to reject UPDATE/DELETE.",
+      "effort": "2 hours"
+    },
+    {
+      "priority": 8,
+      "vulnerability": "HIGH-004",
+      "action": "Add session binding to memory retrieval: pass auth token, validate against Hyphae before querying.",
+      "effort": "1-2 days"
+    }
+  ]
+}
