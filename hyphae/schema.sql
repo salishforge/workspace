@@ -220,3 +220,56 @@ COMMENT ON TABLE hyphae_circuit_breakers IS 'Circuit breaker state machine per s
 COMMENT ON COLUMN hyphae_agent_identities.revoked_at IS 'Instant revocation: agent loses all access';
 COMMENT ON COLUMN hyphae_secrets.nonce IS '96-bit nonce for AES-256-GCM (prevent replay)';
 COMMENT ON COLUMN hyphae_audit_log.log_id IS 'Monotonic ID prevents deletion/reordering attacks';
+
+-- ═══════════════════════════════════════════════════════════════════
+-- Service Registry (Phase 1-2)
+-- ═══════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS hyphae_service_registry (
+  service_id TEXT PRIMARY KEY,
+  service_name TEXT NOT NULL,
+  service_type TEXT NOT NULL,
+  version TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'registering',
+  
+  capabilities JSONB NOT NULL DEFAULT '[]',
+  api_endpoint TEXT NOT NULL,
+  api_protocol TEXT NOT NULL,
+  api_version TEXT,
+  
+  requires JSONB DEFAULT '[]',
+  health_check_url TEXT,
+  health_check_interval INT DEFAULT 30,
+  last_health_check TIMESTAMPTZ,
+  healthy BOOLEAN DEFAULT false,
+  consecutive_failures INT DEFAULT 0,
+  
+  registered_at TIMESTAMPTZ DEFAULT now(),
+  registered_by TEXT,
+  expires_at TIMESTAMPTZ DEFAULT now() + INTERVAL '24 hours',
+  
+  UNIQUE(service_name, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_service_status ON hyphae_service_registry(status, service_type);
+CREATE INDEX IF NOT EXISTS idx_service_health ON hyphae_service_registry(healthy, last_health_check DESC);
+CREATE INDEX IF NOT EXISTS idx_service_expires ON hyphae_service_registry(expires_at);
+
+-- ═══════════════════════════════════════════════════════════════════
+-- Service Integrations (Phase 2)
+-- ═══════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS hyphae_service_integrations (
+  agent_id TEXT NOT NULL,
+  service_id TEXT NOT NULL,
+  integration_type TEXT NOT NULL,
+  capabilities_granted JSONB DEFAULT '[]',
+  integration_token TEXT UNIQUE,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  
+  PRIMARY KEY (agent_id, service_id),
+  FOREIGN KEY (service_id) REFERENCES hyphae_service_registry(service_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_integration_agent ON hyphae_service_integrations(agent_id);
+CREATE INDEX IF NOT EXISTS idx_integration_service ON hyphae_service_integrations(service_id);
