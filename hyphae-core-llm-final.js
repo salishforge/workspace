@@ -248,6 +248,12 @@ const rpcMethods = {
   'model.update_policy': async (params) => {
     return await callModelRouter('model.updatePolicy', params);
   },
+  'model.get_policy_history': async (params) => {
+    return await callModelRouter('model.getPolicyHistory', params);
+  },
+  'model.rollback_policy': async (params) => {
+    return await callModelRouter('model.rollbackPolicy', params);
+  },
   'model.pending_approvals': async (params) => {
     return { message: 'Check admin dashboard at http://localhost:3104/approvals' };
   }

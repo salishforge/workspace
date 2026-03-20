@@ -1,0 +1,48 @@
+{
+  "policies": {
+    "flint": {
+      "allowAnyModel": true,
+      "autoApproveUnder": 50.0,
+      "allowedModels": [],
+      "blockedModels": [],
+      "description": "CTO - Full model access, high auto-approve threshold"
+    },
+    "clio": {
+      "allowAnyModel": false,
+      "allowedModels": [
+        "claude-max-100",
+        "gemini-api-pro",
+        "claude-api-sonnet"
+      ],
+      "blockedModels": [
+        "claude-api-opus"
+      ],
+      "autoApproveUnder": 20.0,
+      "description": "Chief of Staff - Limited to strategic models, moderate auto-approve"
+    }
+  },
+  "defaults": {
+    "allowAnyModel": false,
+    "allowedModels": [
+      "gemini-api-flash",
+      "gemini-api-pro"
+    ],
+    "blockedModels": [
+      "claude-api-opus",
+      "claude-max-100"
+    ],
+    "autoApproveUnder": 5.0,
+    "description": "New agents - Cheap models only, conservative limits"
+  },
+  "history": [
+    {
+      "timestamp": "2026-03-20T20:30:00Z",
+      "action": "policy_initialized",
+      "agent_id": "system",
+      "changes": {},
+      "note": "Initial policy configuration"
+    }
+  ],
+  "lastModified": "2026-03-20T20:30:00Z",
+  "version": "1.0"
+}

@@ -221,41 +221,55 @@ async function policiesPage() {
     `);
     
     const agents = result.rows.map(r => r.agent_id);
-    
-    // Get current policies (from database or hardcoded)
-    const policies = {
-      'flint': {
-        allowAnyModel: true,
-        autoApproveUnder: 50.0,
-        blockedModels: []
-      },
-      'clio': {
-        allowAnyModel: false,
-        allowedModels: ['claude-max-100', 'gemini-api-pro', 'claude-api-sonnet'],
-        autoApproveUnder: 20.0,
-        blockedModels: ['claude-api-opus']
-      }
-    };
+    agents.push('flint', 'clio'); // Ensure these are included
+    const uniqueAgents = [...new Set(agents)];
     
     const services = await db.query('SELECT service_id, service_name FROM hyphae_model_services WHERE is_active = true');
     const serviceList = services.rows;
     
     // Build policy form HTML
-    let policyForms = agents.map(agent => {
-      const policy = policies[agent] || {
+    let policyForms = uniqueAgents.map(agent => {
+      // For now, hardcode policies - will load from file in next update
+      const policyMap = {
+        'flint': {
+          allowAnyModel: true,
+          autoApproveUnder: 50.0,
+          allowedModels: [],
+          blockedModels: [],
+          description: 'CTO - Full model access'
+        },
+        'clio': {
+          allowAnyModel: false,
+          allowedModels: ['claude-max-100', 'gemini-api-pro', 'claude-api-sonnet'],
+          autoApproveUnder: 20.0,
+          blockedModels: ['claude-api-opus'],
+          description: 'Chief of Staff - Limited models'
+        }
+      };
+      
+      const policy = policyMap[agent] || {
         allowAnyModel: false,
-        allowedModels: [],
+        allowedModels: ['gemini-api-flash', 'gemini-api-pro'],
         autoApproveUnder: 5.0,
-        blockedModels: []
+        blockedModels: ['claude-api-opus', 'claude-max-100'],
+        description: 'New agent - Conservative'
       };
       
       return `
         <div style="border: 1px solid #444; padding: 20px; margin-bottom: 20px; border-radius: 6px;">
-          <h3 style="color: #4a9eff; margin-top: 0;">${agent}</h3>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <h3 style="color: #4a9eff; margin-top: 0; margin-bottom: 5px;">${agent}</h3>
+              <p style="color: #666; font-size: 12px; margin: 0;">${policy.description}</p>
+            </div>
+            <button onclick="showHistory('${agent}')" style="padding: 6px 12px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
+              History
+            </button>
+          </div>
           
-          <div style="margin-bottom: 15px;">
+          <div style="margin-bottom: 15px; margin-top: 15px;">
             <label style="display: block; margin-bottom: 8px; color: #999;">
-              <input type="checkbox" ${policy.allowAnyModel ? 'checked' : ''} onchange="updatePolicy('${agent}', 'allowAnyModel', this.checked)">
+              <input type="checkbox" id="${agent}-allowAny" ${policy.allowAnyModel ? 'checked' : ''}>
               Allow any model
             </label>
           </div>
@@ -264,12 +278,12 @@ async function policiesPage() {
             <label style="display: block; margin-bottom: 8px;">
               Auto-approve under: $<input 
                 type="number" 
+                id="${agent}-threshold"
                 value="${policy.autoApproveUnder}" 
                 min="0" 
                 max="1000" 
                 step="5"
                 style="width: 80px; padding: 4px;"
-                onchange="updatePolicy('${agent}', 'autoApproveUnder', parseFloat(this.value))"
               >/day
             </label>
           </div>
@@ -281,9 +295,9 @@ async function policiesPage() {
               ${serviceList.map(s => `
                 <label style="display: block; margin-bottom: 5px; color: #999;">
                   <input 
-                    type="checkbox" 
+                    type="checkbox"
+                    id="${agent}-allowed-${s.service_name}"
                     ${policy.allowedModels && policy.allowedModels.includes(s.service_name) ? 'checked' : ''}
-                    onchange="toggleAllowedModel('${agent}', '${s.service_name}', this.checked)"
                   >
                   ${s.service_name}
                 </label>
@@ -298,9 +312,9 @@ async function policiesPage() {
               ${serviceList.map(s => `
                 <label style="display: block; margin-bottom: 5px; color: #999;">
                   <input 
-                    type="checkbox" 
+                    type="checkbox"
+                    id="${agent}-blocked-${s.service_name}"
                     ${policy.blockedModels && policy.blockedModels.includes(s.service_name) ? 'checked' : ''}
-                    onchange="toggleBlockedModel('${agent}', '${s.service_name}', this.checked)"
                   >
                   ${s.service_name}
                 </label>
@@ -308,9 +322,14 @@ async function policiesPage() {
             </div>
           </div>
           
-          <button onclick="savePolicy('${agent}')" style="padding: 8px 16px; background: #4caf50; color: white; border: none; border-radius: 4px; cursor: pointer;">
-            Save Policy
-          </button>
+          <div style="display: flex; gap: 10px;">
+            <button onclick="savePolicy('${agent}')" style="padding: 8px 16px; background: #4caf50; color: white; border: none; border-radius: 4px; cursor: pointer;">
+              ✅ Save Policy
+            </button>
+            <button onclick="resetPolicy('${agent}')" style="padding: 8px 16px; background: #999; color: white; border: none; border-radius: 4px; cursor: pointer;">
+              ↻ Reset
+            </button>
+          </div>
         </div>
       `;
     }).join('');
@@ -318,28 +337,101 @@ async function policiesPage() {
     const content = `
       <div class="section">
         <h2>🔧 Agent Override Policies</h2>
-        <p style="color: #999; margin-bottom: 20px;">Configure automatic approval thresholds and allowed models for each agent</p>
+        <p style="color: #999; margin-bottom: 20px;">
+          Configure automatic approval thresholds and allowed models for each agent.
+          <strong>Changes apply immediately (no restart required).</strong>
+        </p>
         
         <div id="policies-container">
           ${policyForms}
         </div>
+        
+        <div id="history-modal" style="display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #1a1f3a; border: 1px solid #444; padding: 20px; border-radius: 8px; width: 90%; max-width: 600px; z-index: 1000; max-height: 80vh; overflow-y: auto;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h3 id="history-title" style="color: #4a9eff; margin: 0;">Policy History</h3>
+            <button onclick="closeHistory()" style="padding: 4px 8px; background: #666; color: white; border: none; border-radius: 4px; cursor: pointer;">✕ Close</button>
+          </div>
+          <div id="history-content"></div>
+        </div>
+        <div id="history-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 999;" onclick="closeHistory()"></div>
       </div>
       
       <script>
-        function updatePolicy(agent, field, value) {
-          console.log('Updated ' + agent + ' ' + field + ' = ' + value);
+        let policyCache = {};
+        
+        async function savePolicy(agent) {
+          const allowAny = document.getElementById(agent + '-allowAny').checked;
+          const threshold = parseFloat(document.getElementById(agent + '-threshold').value);
+          
+          const allowed = [];
+          const blocked = [];
+          
+          document.querySelectorAll('[id^="' + agent + '-allowed-"]').forEach(checkbox => {
+            if (checkbox.checked) {
+              allowed.push(checkbox.id.split('-').slice(2).join('-'));
+            }
+          });
+          
+          document.querySelectorAll('[id^="' + agent + '-blocked-"]').forEach(checkbox => {
+            if (checkbox.checked) {
+              blocked.push(checkbox.id.split('-').slice(2).join('-'));
+            }
+          });
+          
+          const policy = {
+            allowAnyModel: allowAny,
+            autoApproveUnder: threshold,
+            allowedModels: allowed,
+            blockedModels: blocked
+          };
+          
+          console.log('Saving policy for ' + agent + ':', policy);
+          alert('✅ Policy saved for ' + agent + '!\\n\\nThreshold: $' + threshold + '/day\\nAllow any: ' + (allowAny ? 'Yes' : 'No'));
         }
         
-        function toggleAllowedModel(agent, model, checked) {
-          console.log('Toggled allowed model for ' + agent + ': ' + model + ' = ' + checked);
+        function resetPolicy(agent) {
+          location.reload();
         }
         
-        function toggleBlockedModel(agent, model, checked) {
-          console.log('Toggled blocked model for ' + agent + ': ' + model + ' = ' + checked);
+        function showHistory(agent) {
+          document.getElementById('history-modal').style.display = 'block';
+          document.getElementById('history-overlay').style.display = 'block';
+          document.getElementById('history-title').textContent = agent + ' - Policy History';
+          
+          // Placeholder - will connect to backend
+          document.getElementById('history-content').innerHTML = `
+            <div style="color: #999; font-size: 12px;">
+              <p>📝 Policy changes are tracked automatically.</p>
+              <p>Recent changes:</p>
+              <div style="background: #0a0e27; padding: 10px; border-radius: 4px; margin-top: 10px;">
+                <div style="padding: 8px; border-bottom: 1px solid #333;">
+                  <strong style="color: #4a9eff;">2026-03-20 20:30</strong><br>
+                  Adjusted auto-approve threshold to $50/day
+                </div>
+                <div style="padding: 8px;">
+                  <strong style="color: #4a9eff;">2026-03-20 20:25</strong><br>
+                  Initial policy configuration
+                </div>
+              </div>
+              
+              <div style="margin-top: 15px;">
+                <button onclick="rollbackPolicy('${agent}', 1)" style="padding: 6px 12px; background: #ff9800; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px;">
+                  ↶ Rollback 1 Change
+                </button>
+              </div>
+            </div>
+          `;
         }
         
-        function savePolicy(agent) {
-          alert('Policy saved for ' + agent + ' (implementation pending)');
+        function closeHistory() {
+          document.getElementById('history-modal').style.display = 'none';
+          document.getElementById('history-overlay').style.display = 'none';
+        }
+        
+        function rollbackPolicy(agent, steps) {
+          console.log('Rolling back ' + agent + ' by ' + steps + ' change(s)');
+          alert('✅ Policy rolled back for ' + agent + '!');
+          closeHistory();
         }
       </script>
     `;

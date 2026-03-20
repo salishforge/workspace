@@ -11,6 +11,8 @@ import crypto from 'crypto';
 import pg from 'pg';
 import fetch from 'node-fetch';
 import http from 'http';
+import fs from 'fs';
+import path from 'path';
 
 const { Pool } = pg;
 
@@ -41,6 +43,161 @@ const CONFIG = {
 
 // Database pool
 const db = new Pool(CONFIG.db);
+
+// ─────────────────────────────────────────────────────────────
+// Policy Configuration Management (File-Based)
+// ─────────────────────────────────────────────────────────────
+
+const POLICIES_CONFIG_PATH = process.env.POLICIES_CONFIG_PATH || './policies-config.json';
+
+/**
+ * Load policies from config file (dynamic - no restart required)
+ */
+function loadPoliciesFromFile() {
+  try {
+    if (!fs.existsSync(POLICIES_CONFIG_PATH)) {
+      console.warn(`[policies] Config file not found at ${POLICIES_CONFIG_PATH}`);
+      return getDefaultPolicies();
+    }
+    
+    const content = fs.readFileSync(POLICIES_CONFIG_PATH, 'utf-8');
+    const config = JSON.parse(content);
+    return config.policies || getDefaultPolicies();
+  } catch (error) {
+    console.error(`[policies] Error loading config:`, error.message);
+    return getDefaultPolicies();
+  }
+}
+
+/**
+ * Save policies to config file
+ */
+function savePolicies(policiesObj, historyEntry) {
+  try {
+    const config = fs.existsSync(POLICIES_CONFIG_PATH) 
+      ? JSON.parse(fs.readFileSync(POLICIES_CONFIG_PATH, 'utf-8'))
+      : { policies: {}, defaults: {}, history: [] };
+    
+    config.policies = policiesObj;
+    config.lastModified = new Date().toISOString();
+    
+    if (historyEntry) {
+      config.history = config.history || [];
+      config.history.push(historyEntry);
+      // Keep last 100 entries
+      if (config.history.length > 100) {
+        config.history = config.history.slice(-100);
+      }
+    }
+    
+    fs.writeFileSync(POLICIES_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8');
+    console.log(`[policies] Updated config file at ${POLICIES_CONFIG_PATH}`);
+    return true;
+  } catch (error) {
+    console.error(`[policies] Error saving config:`, error.message);
+    return false;
+  }
+}
+
+/**
+ * Get policy change history
+ */
+function getPolicyHistory() {
+  try {
+    const config = fs.existsSync(POLICIES_CONFIG_PATH)
+      ? JSON.parse(fs.readFileSync(POLICIES_CONFIG_PATH, 'utf-8'))
+      : {};
+    return config.history || [];
+  } catch (error) {
+    console.error(`[policies] Error reading history:`, error.message);
+    return [];
+  }
+}
+
+/**
+ * Rollback to previous policy version
+ */
+function rollbackPolicy(agentId, steps = 1) {
+  try {
+    const history = getPolicyHistory();
+    
+    // Find policy updates for this agent (in reverse order)
+    const agentUpdates = history
+      .filter(entry => entry.agent_id === agentId && entry.action === 'policy_updated')
+      .reverse(); // Most recent first
+    
+    if (agentUpdates.length === 0) {
+      return { error: `No policy history found for ${agentId}` };
+    }
+    
+    if (agentUpdates.length <= steps) {
+      return { error: `Only ${agentUpdates.length} changes in history, cannot rollback ${steps}` };
+    }
+    
+    // Get the policy state from steps changes ago
+    const targetEntry = agentUpdates[steps];
+    if (!targetEntry || !targetEntry.old_policy) {
+      return { error: `Cannot find policy state to rollback to` };
+    }
+    
+    const policies = loadPoliciesFromFile();
+    const newPolicy = targetEntry.old_policy;
+    const oldPolicy = policies[agentId];
+    
+    policies[agentId] = newPolicy;
+    
+    const rollbackEntry = {
+      timestamp: new Date().toISOString(),
+      action: 'policy_rollback',
+      agent_id: agentId,
+      old_policy: oldPolicy,
+      new_policy: newPolicy,
+      rollback_steps: steps,
+      note: `Rolled back ${steps} change(s)`
+    };
+    
+    savePolicies(policies, rollbackEntry);
+    return {
+      status: 'rolled_back',
+      agent_id: agentId,
+      policy: newPolicy,
+      previous_policy: oldPolicy,
+      steps: steps,
+      reverted_to: targetEntry.timestamp
+    };
+  } catch (error) {
+    console.error(`[policies] Error rolling back:`, error.message);
+    return { error: error.message };
+  }
+}
+
+/**
+ * Get default policies
+ */
+function getDefaultPolicies() {
+  return {
+    'flint': {
+      allowAnyModel: true,
+      autoApproveUnder: 50.0,
+      allowedModels: [],
+      blockedModels: [],
+      description: 'CTO - Full model access, high auto-approve threshold'
+    },
+    'clio': {
+      allowAnyModel: false,
+      allowedModels: [
+        'claude-max-100',
+        'gemini-api-pro',
+        'claude-api-sonnet'
+      ],
+      blockedModels: [
+        'claude-api-opus'
+      ],
+      autoApproveUnder: 20.0,
+      description: 'Chief of Staff - Limited to strategic models'
+    }
+  };
+}
 
 // ─────────────────────────────────────────────────────────────
 // Encryption / Decryption
@@ -532,27 +689,25 @@ async function notifyAgent(agentId, message) {
 // Override Policy Evaluation
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Get policy for agent (loaded from file dynamically)
+ * NO RESTART REQUIRED - reads from disk on each call
+ */
 function getOverridePolicy(agentId) {
-  // Per-agent override policies
-  const policies = {
-    'flint': {
-      allowAnyModel: true,
-      autoApproveUnder: 50.0,
-      blockedModels: []
-    },
-    'clio': {
-      allowAnyModel: false,
-      allowedModels: ['claude-max-100', 'gemini-api-pro', 'claude-api-sonnet'],
-      autoApproveUnder: 20.0,
-      blockedModels: ['claude-api-opus']
-    }
-  };
+  const policies = loadPoliciesFromFile();
   
-  return policies[agentId] || {
+  // Return agent policy or defaults
+  if (policies[agentId]) {
+    return policies[agentId];
+  }
+  
+  // Default for new agents
+  return {
     allowAnyModel: false,
     allowedModels: ['gemini-api-flash', 'gemini-api-pro'],
     autoApproveUnder: 5.0,
-    blockedModels: ['claude-api-opus', 'claude-max-100']
+    blockedModels: ['claude-api-opus', 'claude-max-100'],
+    description: 'New agent - Conservative defaults'
   };
 }
 
@@ -860,21 +1015,80 @@ const rpcMethods = {
       return { error: 'Missing agent_id or policy' };
     }
     
-    // Log to audit trail
-    await logAudit('policy_updated', 'admin', null, null, {
-      agent_id,
-      policy,
-      updated_at: new Date().toISOString()
-    });
+    try {
+      // Get current policies and old policy for history
+      const policies = loadPoliciesFromFile();
+      const oldPolicy = policies[agent_id] || null;
+      
+      // Update policy
+      policies[agent_id] = policy;
+      
+      // Create history entry
+      const historyEntry = {
+        timestamp: new Date().toISOString(),
+        action: 'policy_updated',
+        agent_id: agent_id,
+        old_policy: oldPolicy,
+        new_policy: policy,
+        changes: {
+          allowAnyModel: oldPolicy?.allowAnyModel !== policy.allowAnyModel,
+          autoApproveUnder: oldPolicy?.autoApproveUnder !== policy.autoApproveUnder,
+          allowedModels: JSON.stringify(oldPolicy?.allowedModels) !== JSON.stringify(policy.allowedModels),
+          blockedModels: JSON.stringify(oldPolicy?.blockedModels) !== JSON.stringify(policy.blockedModels)
+        }
+      };
+      
+      // Save to file
+      const success = savePolicies(policies, historyEntry);
+      
+      if (!success) {
+        return { error: 'Failed to persist policy change' };
+      }
+      
+      // Log to audit trail
+      await logAudit('policy_updated', 'admin', null, null, {
+        agent_id,
+        old_policy: oldPolicy,
+        new_policy: policy,
+        updated_at: new Date().toISOString()
+      });
+      
+      console.log(`[model-router] Policy updated for ${agent_id} (persisted to file)`);
+      
+      return {
+        status: 'updated',
+        agent_id,
+        policy,
+        old_policy: oldPolicy,
+        persisted: true,
+        note: 'Policy updated and persisted to config file. Changes active immediately (no restart required).'
+      };
+    } catch (error) {
+      console.error('Error updating policy:', error);
+      return { error: error.message };
+    }
+  },
+  
+  'model.getPolicyHistory': async (params) => {
+    const { agent_id } = params;
+    const allHistory = getPolicyHistory();
     
-    console.log(`[model-router] Policy updated for ${agent_id}:`, policy);
+    if (!agent_id) {
+      return { history: allHistory };
+    }
     
-    return {
-      status: 'updated',
-      agent_id,
-      policy,
-      note: 'Policy updated (full persistence in config file planned)'
-    };
+    const agentHistory = allHistory.filter(entry => entry.agent_id === agent_id);
+    return { agent_id, history: agentHistory };
+  },
+  
+  'model.rollbackPolicy': async (params) => {
+    const { agent_id, steps } = params;
+    
+    if (!agent_id) {
+      return { error: 'Missing agent_id' };
+    }
+    
+    return rollbackPolicy(agent_id, steps || 1);
   }
 };
 
