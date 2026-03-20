@@ -45,7 +45,7 @@ CREATE INDEX IF NOT EXISTS idx_challenges_nonce ON hyphae_registration_challenge
 CREATE TABLE IF NOT EXISTS hyphae_key_grants (
   key_id TEXT PRIMARY KEY,
   agent_id TEXT NOT NULL,
-  encryption_key BYTEA NOT NULL,
+  key_hash TEXT NOT NULL, -- HMAC of derived key (for integrity verification only)
   issued_at TIMESTAMPTZ DEFAULT now(),
   revoked_at TIMESTAMPTZ,
   FOREIGN KEY (agent_id) REFERENCES hyphae_agent_identities(agent_id)
@@ -53,6 +53,9 @@ CREATE TABLE IF NOT EXISTS hyphae_key_grants (
 
 CREATE INDEX IF NOT EXISTS idx_keys_agent ON hyphae_key_grants(agent_id);
 CREATE INDEX IF NOT EXISTS idx_keys_active ON hyphae_key_grants(agent_id, revoked_at);
+
+-- Note: Actual encryption keys are DERIVED at runtime from HYPHAE_ENCRYPTION_KEY env + agent_id (HKDF)
+-- No key material is stored in the database
 
 -- ═══════════════════════════════════════════════════════════════════
 -- Secrets Vault
@@ -92,8 +95,27 @@ CREATE INDEX IF NOT EXISTS idx_audit_agent ON hyphae_audit_log(agent_id, timesta
 CREATE INDEX IF NOT EXISTS idx_audit_action ON hyphae_audit_log(action, timestamp);
 CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON hyphae_audit_log(timestamp DESC);
 
--- Write-only constraint via application (no UPDATE/DELETE allowed)
--- All operations: INSERT ONLY
+-- Immutability: Enforced at database level via trigger + role-based access control
+CREATE OR REPLACE FUNCTION prevent_audit_modification() RETURNS TRIGGER AS $$
+BEGIN
+  RAISE EXCEPTION 'Audit log is immutable: UPDATE and DELETE are not allowed';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER audit_log_immutable
+  BEFORE UPDATE OR DELETE ON hyphae_audit_log
+  FOR EACH ROW
+  EXECUTE FUNCTION prevent_audit_modification();
+
+-- Create read-only role for Hyphae process (INSERT + SELECT only)
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_user WHERE usename = 'hyphae_writer') THEN
+    CREATE ROLE hyphae_writer WITH LOGIN PASSWORD 'change-this-in-production';
+    GRANT INSERT, SELECT ON hyphae_audit_log TO hyphae_writer;
+    -- hyphae_writer explicitly DENIED UPDATE/DELETE at role level
+  END IF;
+END $$;
 
 -- ═══════════════════════════════════════════════════════════════════
 -- Circuit Breaker

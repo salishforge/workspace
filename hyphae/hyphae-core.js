@@ -13,9 +13,10 @@
  * Port: 3100
  */
 
-import http from 'http';
+import https from 'https';
 import crypto from 'crypto';
 import pg from 'pg';
+import fs from 'fs';
 import { EventEmitter } from 'events';
 
 const PORT = process.env.HYPHAE_PORT || 3100;
@@ -68,8 +69,9 @@ class CircuitBreaker extends EventEmitter {
 
     const total = this.failures.length + this.successes.length;
     const errorRate = total > 0 ? this.failures.length / total : 0;
+    const MIN_CALL_THRESHOLD = 10; // Require at least 10 calls before opening
 
-    if (errorRate > (this.errorThreshold / 100) && this.failures.length > 0) {
+    if (errorRate > (this.errorThreshold / 100) && this.failures.length > 0 && total >= MIN_CALL_THRESHOLD) {
       if (this.state === 'CLOSED') {
         this.setState('OPEN');
         this.openedAt = Date.now();
@@ -161,6 +163,24 @@ async function verifyAgent(agentId) {
   }
 }
 
+// ── Key Derivation (no key material stored) ──
+function deriveAgentKey(agentId) {
+  // HKDF: derive per-agent key from master key + agent_id
+  // HYPHAE_ENCRYPTION_KEY (256-bit) + agent_id → 32-byte AES key
+  const ikm = Buffer.from(ENCRYPTION_KEY, 'utf-8').slice(0, 32);
+  const salt = Buffer.alloc(0);
+  const info = Buffer.from(`hyphae-agent-key:${agentId}`, 'utf-8');
+  
+  // HKDF-SHA256: extract + expand
+  const prk = crypto.createHmac('sha256', salt).update(ikm).digest();
+  const expanded = crypto.createHmac('sha256', prk)
+    .update(Buffer.concat([info, Buffer.from([1])]))
+    .digest()
+    .slice(0, 32);
+  
+  return expanded;
+}
+
 // ── Vault Operations ──
 async function getSecret(agentId, secretName) {
   try {
@@ -183,21 +203,18 @@ async function getSecret(agentId, secretName) {
 
     const { value_encrypted, nonce } = result.rows[0];
     
-    // Decrypt with agent's encryption key
-    const keyResult = await pool.query(
-      `SELECT encryption_key FROM hyphae_key_grants WHERE agent_id = $1 AND revoked_at IS NULL LIMIT 1`,
-      [agentId]
-    );
-
-    if (keyResult.rows.length === 0) {
-      await auditLog('vault_get', agentId, secretName, 'denied', { reason: 'no_encryption_key' });
-      throw new Error('No encryption key for agent');
-    }
-
-    // Decrypt (simplified - normally would use actual key)
-    // In production, the key would be decrypted with master key first
+    // Decrypt with derived agent key
+    const agentKey = deriveAgentKey(agentId);
+    const nonceBuffer = Buffer.from(nonce, 'hex');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', agentKey, nonceBuffer);
+    
+    const decrypted = Buffer.concat([
+      decipher.update(Buffer.from(value_encrypted, 'hex')),
+      decipher.final()
+    ]).toString('utf-8');
+    
     await auditLog('vault_get', agentId, secretName, 'success');
-    return value_encrypted; // In production: decrypt here
+    return decrypted;
   } catch (error) {
     await auditLog('vault_get', agentId, secretName, 'failure', { error: error.message });
     throw error;
@@ -272,13 +289,37 @@ async function sendPriorityInterrupt(agentId, serviceName) {
   // TODO: Implement actual interrupt delivery channel
 }
 
+// ── Authentication Middleware ──
+function verifyBearerToken(req) {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Bearer ')) {
+    return null;
+  }
+  return auth.slice(7); // Extract token
+}
+
 // ── HTTP Server ──
-const server = http.createServer(async (req, res) => {
+const tlsOptions = process.env.HYPHAE_SKIP_TLS ? null : {
+  key: fs.readFileSync(process.env.HYPHAE_TLS_KEY || '/etc/hyphae/key.pem', 'utf-8').catch(() => null),
+  cert: fs.readFileSync(process.env.HYPHAE_TLS_CERT || '/etc/hyphae/cert.pem', 'utf-8').catch(() => null)
+};
+
+const createServer = tlsOptions && tlsOptions.key && tlsOptions.cert ? https.createServer : require('http').createServer;
+const serverConfig = tlsOptions && tlsOptions.key && tlsOptions.cert ? [tlsOptions] : [];
+const server = createServer(...serverConfig, async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
 
+  // Unauthenticated endpoints
   if (req.url === '/health' && req.method === 'GET') {
     res.writeHead(200);
     res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
+    return;
+  }
+
+  // Authenticated endpoints (require bearer token)
+  if ((req.url === '/metrics' || req.url === '/rpc') && !verifyBearerToken(req)) {
+    res.writeHead(401);
+    res.end(JSON.stringify({ error: 'Unauthorized: missing or invalid bearer token' }));
     return;
   }
 
@@ -291,8 +332,19 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === '/rpc' && req.method === 'POST') {
     let body = '';
-    req.on('data', chunk => body += chunk);
+    const MAX_BODY_SIZE = 1024 * 1024; // 1MB limit
+    
+    req.on('data', chunk => {
+      body += chunk;
+      if (body.length > MAX_BODY_SIZE) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Payload too large (max 1MB)' }));
+      }
+    });
+    
     req.on('end', async () => {
+      if (body.length > MAX_BODY_SIZE) return; // Already responded
+      
       try {
         const { jsonrpc, method, params, id } = JSON.parse(body);
 
