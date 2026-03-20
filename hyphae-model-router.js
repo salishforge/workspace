@@ -1,0 +1,716 @@
+#!/usr/bin/env node
+
+/**
+ * Hyphae Model Router Service
+ * 
+ * Intelligent model routing, cost management, and API key lifecycle
+ * March 20, 2026
+ */
+
+const crypto = require('crypto');
+const { Pool } = require('pg');
+const fetch = require('node-fetch');
+
+// Configuration
+const CONFIG = {
+  db: {
+    host: process.env.DB_HOST || '100.97.161.7',
+    port: parseInt(process.env.DB_PORT || '5433'),
+    database: process.env.DB_NAME || 'hyphae',
+    user: process.env.DB_USER || 'postgres',
+    password: process.env.DB_PASSWORD || 'hyphae-password-2026'
+  },
+  encryption: {
+    algorithm: 'aes-256-gcm',
+    key: process.env.ENCRYPTION_KEY || 'hyphae-encryption-key-2026-32-char-minimum-required'.slice(0, 32)
+  },
+  hyphae: {
+    endpoint: 'http://localhost:3102/rpc',
+    bearerToken: process.env.HYPHAE_TOKEN || 'hyphae-auth-token-2026'
+  },
+  telegram: {
+    botToken: process.env.TELEGRAM_BOT_TOKEN || '',
+    flintBotToken: '8512187116:AAFPkeNNpGIAEiY117OQw7l75CHabUH3ZU8',
+    clioBotToken: '8789255068:AAF92Z1thzb66VxMkH9l-03pMmaeGosnMqg',
+    adminUserId: '8201776295'
+  }
+};
+
+// Database pool
+const db = new Pool(CONFIG.db);
+
+// ─────────────────────────────────────────────────────────────
+// Encryption / Decryption
+// ─────────────────────────────────────────────────────────────
+
+function encrypt(plaintext) {
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv(
+    CONFIG.encryption.algorithm,
+    Buffer.from(CONFIG.encryption.key, 'utf-8').slice(0, 32),
+    iv
+  );
+  
+  let encrypted = cipher.update(plaintext, 'utf-8', 'hex');
+  encrypted += cipher.final('hex');
+  const authTag = cipher.getAuthTag();
+  
+  return {
+    encrypted: encrypted,
+    iv: iv.toString('hex'),
+    authTag: authTag.toString('hex')
+  };
+}
+
+function decrypt(encryptedData, iv, authTag) {
+  const decipher = crypto.createDecipheriv(
+    CONFIG.encryption.algorithm,
+    Buffer.from(CONFIG.encryption.key, 'utf-8').slice(0, 32),
+    Buffer.from(iv, 'hex')
+  );
+  
+  decipher.setAuthTag(Buffer.from(authTag, 'hex'));
+  
+  let decrypted = decipher.update(encryptedData, 'hex', 'utf-8');
+  decrypted += decipher.final('utf-8');
+  
+  return decrypted;
+}
+
+// ─────────────────────────────────────────────────────────────
+// API Key Management
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Generate a new API key for an agent-service pair
+ * Returns: {key_id, key_value, service_id}
+ */
+async function generateApiKey(agentId, serviceId, reason = null) {
+  try {
+    // Check if agent already has key for this service
+    const existing = await db.query(
+      `SELECT key_id, is_active FROM hyphae_model_api_keys 
+       WHERE agent_id = $1 AND service_id = $2 AND is_active = true`,
+      [agentId, serviceId]
+    );
+    
+    if (existing.rows.length > 0) {
+      return {
+        error: 'Agent already has active key for this service',
+        key_id: existing.rows[0].key_id
+      };
+    }
+    
+    // Generate new key
+    const keyValue = crypto.randomBytes(32).toString('hex');
+    const { encrypted, iv, authTag } = encrypt(keyValue);
+    const keyId = crypto.randomUUID();
+    
+    // Insert key record (starts in 'pending' status)
+    await db.query(
+      `INSERT INTO hyphae_model_api_keys 
+       (key_id, agent_id, service_id, key_value_encrypted, key_nonce, status, requested_at)
+       VALUES ($1, $2, $3, $4, $5, 'pending', NOW())`,
+      [keyId, agentId, serviceId, `${encrypted}|${iv}|${authTag}`, iv]
+    );
+    
+    // Log to audit
+    await logAudit('key_requested', agentId, serviceId, keyId, {
+      reason
+    });
+    
+    return {
+      key_id: keyId,
+      key_value: keyValue,
+      status: 'pending',
+      service_id: serviceId,
+      agent_id: agentId
+    };
+  } catch (error) {
+    console.error('Error generating API key:', error);
+    throw error;
+  }
+}
+
+/**
+ * Retrieve encrypted API key for an approved agent
+ */
+async function getApiKey(agentId, serviceId) {
+  try {
+    const result = await db.query(
+      `SELECT key_id, key_value_encrypted, key_nonce, status, is_active
+       FROM hyphae_model_api_keys
+       WHERE agent_id = $1 AND service_id = $2 AND is_active = true AND status = 'approved'`,
+      [agentId, serviceId]
+    );
+    
+    if (result.rows.length === 0) {
+      return { error: 'No approved key found for this agent-service pair' };
+    }
+    
+    const keyRecord = result.rows[0];
+    const [encrypted, iv, authTag] = keyRecord.key_value_encrypted.split('|');
+    const keyValue = decrypt(encrypted, iv, authTag);
+    
+    // Update last_use_at
+    await db.query(
+      `UPDATE hyphae_model_api_keys SET last_use_at = NOW(), total_requests = total_requests + 1
+       WHERE key_id = $1`,
+      [keyRecord.key_id]
+    );
+    
+    return {
+      key_id: keyRecord.key_id,
+      key_value: keyValue,
+      service_id: serviceId,
+      agent_id: agentId
+    };
+  } catch (error) {
+    console.error('Error retrieving API key:', error);
+    throw error;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Approval Workflow
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Approve a pending API key request
+ */
+async function approveApiKey(keyId, approvedBy, reason = null) {
+  try {
+    // Update key status
+    const result = await db.query(
+      `UPDATE hyphae_model_api_keys
+       SET status = 'approved', approved_by = $1, approved_at = NOW(), approval_reason = $2
+       WHERE key_id = $3 AND status = 'pending'
+       RETURNING agent_id, service_id`,
+      [approvedBy, reason, keyId]
+    );
+    
+    if (result.rows.length === 0) {
+      return { error: 'Key not found or not in pending status' };
+    }
+    
+    const { agent_id, service_id } = result.rows[0];
+    
+    // Log to audit
+    await logAudit('key_approved', approvedBy, service_id, keyId, {
+      agent_id,
+      reason
+    });
+    
+    // Send notification to agent
+    await notifyAgent(agent_id, `✅ API key for service approved. Ready to use.`);
+    
+    return {
+      key_id: keyId,
+      status: 'approved',
+      approved_by: approvedBy,
+      approved_at: new Date().toISOString()
+    };
+  } catch (error) {
+    console.error('Error approving API key:', error);
+    throw error;
+  }
+}
+
+/**
+ * Deny a pending API key request
+ */
+async function denyApiKey(keyId, deniedBy, reason = null) {
+  try {
+    const result = await db.query(
+      `UPDATE hyphae_model_api_keys
+       SET status = 'rejected', approved_by = $1, approval_reason = $2
+       WHERE key_id = $3 AND status = 'pending'
+       RETURNING agent_id, service_id`,
+      [deniedBy, reason, keyId]
+    );
+    
+    if (result.rows.length === 0) {
+      return { error: 'Key not found or not in pending status' };
+    }
+    
+    const { agent_id, service_id } = result.rows[0];
+    
+    await logAudit('key_denied', deniedBy, service_id, keyId, {
+      agent_id,
+      reason
+    });
+    
+    await notifyAgent(agent_id, `❌ API key request denied. Reason: ${reason || 'Not specified'}`);
+    
+    return {
+      key_id: keyId,
+      status: 'rejected',
+      denied_by: deniedBy,
+      denial_reason: reason
+    };
+  } catch (error) {
+    console.error('Error denying API key:', error);
+    throw error;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Limit Tracking
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Get current limit status for an agent-service
+ */
+async function getLimitStatus(agentId, serviceId) {
+  try {
+    const result = await db.query(
+      `SELECT 
+        daily_limit_usd, monthly_limit_usd, hourly_limit_usd,
+        current_daily_usage_usd, current_monthly_usage_usd, current_hourly_usage_usd,
+        daily_reset_at, monthly_reset_at, hourly_reset_at,
+        alert_threshold, hard_stop_threshold, is_blocked
+       FROM hyphae_model_limits
+       WHERE agent_id = $1 AND service_id = $2`,
+      [agentId, serviceId]
+    );
+    
+    if (result.rows.length === 0) {
+      return {
+        error: 'No limit record found',
+        agent_id: agentId,
+        service_id: serviceId
+      };
+    }
+    
+    const limit = result.rows[0];
+    
+    // Calculate percentages
+    const dailyPct = limit.daily_limit_usd ? (limit.current_daily_usage_usd / limit.daily_limit_usd) : 0;
+    const monthlyPct = limit.monthly_limit_usd ? (limit.current_monthly_usage_usd / limit.monthly_limit_usd) : 0;
+    const hourlyPct = limit.hourly_limit_usd ? (limit.current_hourly_usage_usd / limit.hourly_limit_usd) : 0;
+    
+    const maxPct = Math.max(dailyPct, monthlyPct, hourlyPct);
+    const status = limit.is_blocked ? 'blocked' : 
+                   (maxPct >= limit.hard_stop_threshold ? 'hard_stop' :
+                    maxPct >= limit.alert_threshold ? 'alert' : 'ok');
+    
+    return {
+      agent_id: agentId,
+      service_id: serviceId,
+      daily_usage_pct: (dailyPct * 100).toFixed(1),
+      monthly_usage_pct: (monthlyPct * 100).toFixed(1),
+      hourly_usage_pct: (hourlyPct * 100).toFixed(1),
+      max_usage_pct: (maxPct * 100).toFixed(1),
+      status,
+      is_blocked: limit.is_blocked,
+      next_daily_reset: limit.daily_reset_at,
+      next_monthly_reset: limit.monthly_reset_at
+    };
+  } catch (error) {
+    console.error('Error getting limit status:', error);
+    throw error;
+  }
+}
+
+/**
+ * Update limit usage and check thresholds
+ */
+async function updateLimitUsage(agentId, serviceId, costIncurred, tokens = 0) {
+  try {
+    // Get current limits
+    const limitStatus = await getLimitStatus(agentId, serviceId);
+    
+    if (limitStatus.error) {
+      return { error: limitStatus.error };
+    }
+    
+    // Check hard stop before update
+    if (limitStatus.status === 'hard_stop' || limitStatus.is_blocked) {
+      return {
+        error: 'Usage limit exceeded',
+        blocked: true,
+        status: limitStatus
+      };
+    }
+    
+    // Update usage
+    await db.query(
+      `UPDATE hyphae_model_limits
+       SET 
+         current_daily_usage_usd = current_daily_usage_usd + $1,
+         current_monthly_usage_usd = current_monthly_usage_usd + $1,
+         current_rolling_usage_tokens = current_rolling_usage_tokens + $2,
+         updated_at = NOW()
+       WHERE agent_id = $3 AND service_id = $4`,
+      [costIncurred, tokens, agentId, serviceId]
+    );
+    
+    // Check if we hit alert threshold
+    const newStatus = await getLimitStatus(agentId, serviceId);
+    if (newStatus.status === 'alert') {
+      await notifyAdmin(
+        `⚠️ ${agentId} approaching limit on ${serviceId}:\n` +
+        `Usage: ${newStatus.max_usage_pct}%\n` +
+        `Cost: $${costIncurred.toFixed(4)}`
+      );
+    } else if (newStatus.status === 'hard_stop') {
+      // Block further usage
+      await db.query(
+        `UPDATE hyphae_model_limits
+         SET is_blocked = true, blocked_reason = 'Hard limit exceeded', blocked_at = NOW()
+         WHERE agent_id = $1 AND service_id = $2`,
+        [agentId, serviceId]
+      );
+      
+      await notifyAdmin(
+        `🛑 ${agentId} HIT HARD LIMIT on ${serviceId}\n` +
+        `Usage: ${newStatus.max_usage_pct}%\n` +
+        `Cost: $${costIncurred.toFixed(4)}`
+      );
+    }
+    
+    return { success: true, status: newStatus };
+  } catch (error) {
+    console.error('Error updating limit usage:', error);
+    throw error;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Intelligent Router Algorithm
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Classify a task based on type, complexity, urgency
+ */
+function classifyTask(taskType, complexity, isUrgent = false) {
+  return {
+    type: taskType || 'general',
+    complexity: complexity || 'moderate',
+    urgency: isUrgent ? 'high' : 'normal'
+  };
+}
+
+/**
+ * Score a service for the given task
+ */
+async function scoreService(service, agentId, taskClassification) {
+  let score = 100;  // Base score
+  
+  // Get limit status
+  const limitStatus = await getLimitStatus(agentId, service.service_id);
+  if (limitStatus.error) {
+    return { service, score: -999, reason: 'No limit configured' };
+  }
+  
+  // Hard constraints
+  if (limitStatus.status === 'hard_stop' || limitStatus.is_blocked) {
+    return { service, score: -999, reason: 'Limit exceeded' };
+  }
+  
+  // Penalty for approaching limits
+  const usagePct = parseFloat(limitStatus.max_usage_pct) / 100;
+  if (usagePct > 0.90) score -= 50;
+  if (usagePct > 0.70) score -= 20;
+  score += (1 - usagePct) * 10;
+  
+  // Cost optimization
+  let costPerToken = 0.001;  // Default estimate
+  if (service.service_name.includes('haiku')) costPerToken = 0.0000048;
+  if (service.service_name.includes('flash')) costPerToken = 0.00000053;
+  if (service.service_name.includes('sonnet')) costPerToken = 0.000018;
+  if (service.service_name.includes('opus')) costPerToken = 0.00006;
+  
+  score += (1 / costPerToken) * 0.01;  // Cheaper = higher score
+  
+  // Task fit
+  if (taskClassification.type === 'coding') {
+    if (service.service_name.includes('max') || service.service_name.includes('opus')) score += 30;
+    if (service.service_name.includes('flash')) score -= 15;
+  }
+  if (taskClassification.type === 'chat') {
+    if (service.service_name.includes('flash')) score += 20;
+    if (service.service_name.includes('max')) score += 5;
+  }
+  if (taskClassification.complexity === 'hard') {
+    if (service.service_name.includes('opus') || service.service_name.includes('max')) score += 25;
+    if (service.service_name.includes('flash')) score -= 20;
+  }
+  
+  // Urgency
+  if (taskClassification.urgency === 'high' && service.service_name.includes('max')) {
+    score += 10;
+  }
+  
+  return {
+    service,
+    score,
+    reason: `Cost-optimized for ${taskClassification.type} (${taskClassification.complexity})`
+  };
+}
+
+/**
+ * Select optimal model based on task and current limits
+ */
+async function selectOptimalModel(agentId, taskType, complexity, isUrgent = false) {
+  try {
+    const classification = classifyTask(taskType, complexity, isUrgent);
+    
+    // Get all active services
+    const servicesResult = await db.query(
+      `SELECT service_id, service_name, service_type, provider, billing_model
+       FROM hyphae_model_services
+       WHERE is_active = true
+       ORDER BY service_name`
+    );
+    
+    const services = servicesResult.rows;
+    
+    // Score each service
+    const scored = await Promise.all(
+      services.map(service => scoreService(service, agentId, classification))
+    );
+    
+    // Sort by score (highest first)
+    const ranked = scored.sort((a, b) => b.score - a.score);
+    
+    // Return top option
+    const selected = ranked[0];
+    
+    return {
+      service_id: selected.service.service_id,
+      service_name: selected.service.service_name,
+      provider: selected.service.provider,
+      score: selected.score,
+      reason: selected.reason,
+      ranking: ranked.map((r, i) => ({
+        rank: i + 1,
+        service: r.service.service_name,
+        score: r.score
+      }))
+    };
+  } catch (error) {
+    console.error('Error selecting optimal model:', error);
+    throw error;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Notifications
+// ─────────────────────────────────────────────────────────────
+
+async function notifyAdmin(message) {
+  try {
+    const url = `https://api.telegram.org/bot${CONFIG.telegram.flintBotToken}/sendMessage`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: CONFIG.telegram.adminUserId,
+        text: message,
+        parse_mode: 'Markdown'
+      })
+    });
+    
+    if (!response.ok) {
+      console.error('Telegram notification failed:', await response.text());
+    }
+  } catch (error) {
+    console.error('Error sending admin notification:', error);
+  }
+}
+
+async function notifyAgent(agentId, message) {
+  // For now, just log. In future: agent-specific channels
+  console.log(`[AGENT NOTIFICATION] ${agentId}: ${message}`);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Audit Logging
+// ─────────────────────────────────────────────────────────────
+
+async function logAudit(actionType, actorId, serviceId, keyId = null, details = {}) {
+  try {
+    await db.query(
+      `INSERT INTO hyphae_model_audit_log 
+       (action_type, actor_id, target_agent_id, target_service_id, target_key_id, details)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [actionType, actorId, actorId, serviceId, keyId, JSON.stringify(details)]
+    );
+  } catch (error) {
+    console.error('Error logging audit:', error);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// RPC Method Handlers
+// ─────────────────────────────────────────────────────────────
+
+const rpcMethods = {
+  // Service registry
+  'model.getServices': async (params) => {
+    const result = await db.query(
+      `SELECT service_id, service_name, service_type, provider, billing_model, monthly_cost
+       FROM hyphae_model_services
+       WHERE is_active = true`
+    );
+    return { services: result.rows };
+  },
+  
+  // API key management
+  'model.requestAccess': async (params) => {
+    const { agent_id, service_id, reason } = params;
+    if (!agent_id || !service_id) {
+      return { error: 'Missing agent_id or service_id' };
+    }
+    return await generateApiKey(agent_id, service_id, reason);
+  },
+  
+  'model.approveKey': async (params) => {
+    const { key_id, approved_by, reason } = params;
+    if (!key_id || !approved_by) {
+      return { error: 'Missing key_id or approved_by' };
+    }
+    return await approveApiKey(key_id, approved_by, reason);
+  },
+  
+  'model.denyKey': async (params) => {
+    const { key_id, denied_by, reason } = params;
+    if (!key_id || !denied_by) {
+      return { error: 'Missing key_id or denied_by' };
+    }
+    return await denyApiKey(key_id, denied_by, reason);
+  },
+  
+  'model.getKey': async (params) => {
+    const { agent_id, service_id } = params;
+    if (!agent_id || !service_id) {
+      return { error: 'Missing agent_id or service_id' };
+    }
+    return await getApiKey(agent_id, service_id);
+  },
+  
+  // Limit management
+  'model.getLimitStatus': async (params) => {
+    const { agent_id, service_id } = params;
+    if (!agent_id || !service_id) {
+      return { error: 'Missing agent_id or service_id' };
+    }
+    return await getLimitStatus(agent_id, service_id);
+  },
+  
+  'model.updateUsage': async (params) => {
+    const { agent_id, service_id, cost, tokens } = params;
+    if (!agent_id || !service_id || cost === undefined) {
+      return { error: 'Missing required parameters' };
+    }
+    return await updateLimitUsage(agent_id, service_id, cost, tokens || 0);
+  },
+  
+  // Router
+  'model.selectOptimal': async (params) => {
+    const { agent_id, task_type, complexity, is_urgent } = params;
+    if (!agent_id || !task_type) {
+      return { error: 'Missing agent_id or task_type' };
+    }
+    return await selectOptimalModel(agent_id, task_type, complexity, is_urgent);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────
+// HTTP Server
+// ─────────────────────────────────────────────────────────────
+
+const http = require('http');
+
+const server = http.createServer(async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  if (req.method === 'OPTIONS') {
+    res.writeHead(200);
+    res.end();
+    return;
+  }
+  
+  if (req.url === '/health') {
+    res.writeHead(200);
+    res.end(JSON.stringify({ status: 'ok', service: 'model-router' }));
+    return;
+  }
+  
+  if (req.url === '/rpc' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+      try {
+        const { method, params, id } = JSON.parse(body);
+        
+        if (!rpcMethods[method]) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: 'Unknown method', id }));
+          return;
+        }
+        
+        const result = await rpcMethods[method](params || {});
+        res.writeHead(200);
+        res.end(JSON.stringify({ result, id }));
+      } catch (error) {
+        console.error('RPC error:', error);
+        res.writeHead(500);
+        res.end(JSON.stringify({ error: error.message }));
+      }
+    });
+    return;
+  }
+  
+  res.writeHead(404);
+  res.end(JSON.stringify({ error: 'Not found' }));
+});
+
+// Startup
+async function startup() {
+  try {
+    // Test database connection
+    const result = await db.query('SELECT NOW()');
+    console.log('✅ Database connected');
+    
+    // Initialize schema
+    console.log('📊 Initializing database schema...');
+    const schema = require('fs').readFileSync('./hyphae-model-database.sql', 'utf-8');
+    const statements = schema.split(';').filter(s => s.trim());
+    
+    for (const stmt of statements) {
+      try {
+        await db.query(stmt);
+      } catch (error) {
+        if (!error.message.includes('already exists')) {
+          console.warn('Schema statement warning:', error.message.slice(0, 100));
+        }
+      }
+    }
+    
+    console.log('✅ Schema initialized');
+    
+    // Start HTTP server
+    const PORT = process.env.PORT || 3105;
+    server.listen(PORT, () => {
+      console.log(`✅ Model Router Service listening on port ${PORT}`);
+      console.log(`   RPC: POST http://localhost:${PORT}/rpc`);
+      console.log(`   Health: GET http://localhost:${PORT}/health`);
+    });
+    
+  } catch (error) {
+    console.error('❌ Startup failed:', error);
+    process.exit(1);
+  }
+}
+
+startup();
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('Shutting down gracefully...');
+  await db.end();
+  server.close();
+});
