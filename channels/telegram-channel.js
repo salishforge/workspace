@@ -11,6 +11,10 @@
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || 'NOT_CONFIGURED';
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
+// Polling mode for incoming messages (webhook not available in HTTP-only mode)
+let lastUpdateId = 0;
+let pollingActive = false;
+
 export class TelegramChannel {
   /**
    * Send message to human via Telegram
@@ -204,6 +208,57 @@ export class TelegramChannel {
         is_available: false,
         error: error.message
       };
+    }
+  }
+
+  /**
+   * Poll for incoming messages (webhook alternative for HTTP-only mode)
+   * Telegram requires HTTPS for webhooks, so we use polling instead
+   * 
+   * @returns {array} Array of pending messages from Telegram
+   */
+  async pollForMessages() {
+    if (!TELEGRAM_TOKEN || TELEGRAM_TOKEN === 'NOT_CONFIGURED') {
+      return [];
+    }
+
+    try {
+      const response = await fetch(`${TELEGRAM_API}/getUpdates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          offset: lastUpdateId + 1,
+          timeout: 5,  // Long polling timeout
+          allowed_updates: ['message']
+        })
+      });
+
+      if (!response.ok) {
+        console.warn('[telegram] Poll failed:', response.status);
+        return [];
+      }
+
+      const data = await response.json();
+      const updates = data.result || [];
+
+      // Track last update ID to avoid duplicates
+      if (updates.length > 0) {
+        lastUpdateId = updates[updates.length - 1].update_id;
+      }
+
+      // Convert Telegram updates to message format
+      return updates
+        .filter(update => update.message && update.message.text)
+        .map(update => ({
+          update_id: update.update_id,
+          from_human_id: update.message.from.id.toString(),
+          message: update.message.text,
+          timestamp: new Date(update.message.date * 1000),
+          chat_id: update.message.chat.id
+        }));
+    } catch (error) {
+      console.error('[telegram] Poll error:', error.message);
+      return [];
     }
   }
 
