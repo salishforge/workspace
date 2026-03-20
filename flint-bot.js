@@ -107,23 +107,147 @@ async function handleTelegramMessage(req, res) {
   }
 }
 
-// ── LLM Response Generation ──
+// ── LLM Response Generation (with Intelligent Model Router) ──
 
 async function generateResponse(userMessage, conversationHistory) {
   try {
-    const model = getAgentModel('flint');
+    // Classify task for intelligent routing
+    const taskType = classifyTask(userMessage);
+    const selection = await selectOptimalModel('flint', taskType.type, taskType.complexity);
     
-    if (model.provider === 'anthropic') {
-      return await callClaude('flint', model.name, FLINT_SYSTEM_PROMPT, userMessage, conversationHistory);
-    } else if (model.provider === 'google') {
-      return await callGemini('flint', model.name, FLINT_SYSTEM_PROMPT, userMessage, conversationHistory);
-    } else {
-      return `I'm configured to use ${model.name}, but that model is not available.`;
+    if (!selection.error) {
+      console.log(`[flint-bot] ⚡ Router selected ${selection.service_name} (score: ${selection.score})`);
     }
+    
+    // Determine which LLM to use (fallback to default if router unavailable)
+    const model = selection.error ? getAgentModel('flint') : inferModel(selection.service_name);
+    
+    let response;
+    if (model.provider === 'anthropic') {
+      response = await callClaude('flint', model.name, FLINT_SYSTEM_PROMPT, userMessage, conversationHistory);
+    } else if (model.provider === 'google') {
+      response = await callGemini('flint', model.name, FLINT_SYSTEM_PROMPT, userMessage, conversationHistory);
+    } else {
+      response = `I'm configured to use ${model.name}, but that model is not available.`;
+    }
+    
+    // Report usage back to router (if selection was successful)
+    if (!selection.error && selection.service_id) {
+      const tokens = estimateTokens(userMessage, response);
+      await reportUsage('flint', selection.service_id, tokens.total);
+    }
+    
+    return response;
   } catch (error) {
     console.error('[flint-bot] LLM error:', error.message);
     return `I encountered an error generating a response: ${error.message}`;
   }
+}
+
+// ── Task Classification ──
+function classifyTask(userMessage) {
+  const text = (userMessage || '').toLowerCase();
+  
+  let type = 'chat';
+  if (text.match(/\b(code|implement|script|function|class|debug|refactor|sql|database|schema)\b/)) {
+    type = 'coding';
+  } else if (text.match(/\b(think|reason|analyze|architecture|design|strategy|why)\b/)) {
+    type = 'reasoning';
+  }
+  
+  let complexity = 'moderate';
+  if (text.match(/\b(complex|difficult|intricate|architecture|refactor|debug)\b/)) {
+    complexity = 'hard';
+  } else if (text.match(/\b(simple|quick|easy|explain|summarize)\b/)) {
+    complexity = 'simple';
+  }
+  
+  return { type, complexity };
+}
+
+// ── Infer Model from Service Name ──
+function inferModel(serviceName) {
+  const name = (serviceName || '').toLowerCase();
+  
+  if (name.includes('claude-opus')) {
+    return { provider: 'anthropic', name: 'claude-opus-4-1' };
+  } else if (name.includes('claude-sonnet')) {
+    return { provider: 'anthropic', name: 'claude-3-5-sonnet-20241022' };
+  } else if (name.includes('claude-haiku')) {
+    return { provider: 'anthropic', name: 'claude-3-haiku-20240307' };
+  } else if (name.includes('claude-max')) {
+    return { provider: 'anthropic', name: 'claude-opus-4-1' };
+  } else if (name.includes('gemini-3-1-pro')) {
+    return { provider: 'google', name: 'gemini-3.1-pro-latest' };
+  } else if (name.includes('gemini-2-5-pro')) {
+    return { provider: 'google', name: 'gemini-2.5-pro-latest' };
+  } else if (name.includes('gemini-flash')) {
+    return { provider: 'google', name: 'gemini-2.5-flash-latest' };
+  }
+  
+  return getAgentModel('flint');
+}
+
+// ── Intelligent Model Selection (via Hyphae Router) ──
+async function selectOptimalModel(agentId, taskType, complexity) {
+  try {
+    const response = await fetch('http://localhost:3100/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: 'model.select_optimal',
+        params: { agent_id: agentId, task_type: taskType, complexity },
+        id: Date.now()
+      })
+    });
+    
+    if (!response.ok) {
+      return { error: `Router returned ${response.status}` };
+    }
+    
+    const data = await response.json();
+    return data.result || { error: 'No result' };
+  } catch (error) {
+    console.warn('[flint-bot] Router error:', error.message);
+    return { error: error.message };
+  }
+}
+
+// ── Usage Reporting ──
+async function reportUsage(agentId, serviceId, totalTokens) {
+  try {
+    const estimatedCost = totalTokens * 0.00001;
+    
+    await fetch('http://localhost:3100/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: 'model.report_usage',
+        params: {
+          agent_id: agentId,
+          service_id: serviceId,
+          tokens: totalTokens,
+          cost: estimatedCost
+        },
+        id: Date.now()
+      })
+    });
+  } catch (error) {
+    // Silently fail - usage reporting is not critical
+  }
+}
+
+// ── Token Estimation ──
+function estimateTokens(prompt, response) {
+  const promptChars = (prompt || '').length;
+  const responseChars = (response || '').length;
+  const avgCharsPerToken = 4;
+  
+  return {
+    input: Math.ceil(promptChars / avgCharsPerToken),
+    output: Math.ceil(responseChars / avgCharsPerToken),
+    total: Math.ceil((promptChars + responseChars) / avgCharsPerToken)
+  };
 }
 
 // ── Model Management ──

@@ -180,6 +180,65 @@ const pool = new Pool({ connectionString: DB_URL });
 // ── Server ──
 const server = http.createServer();
 
+// ── RPC Methods (Model Router Integration) ──
+async function callModelRouter(method, params) {
+  try {
+    const response = await fetch('http://localhost:3105/rpc', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer hyphae-auth-token-2026'
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method,
+        params,
+        id: Date.now()
+      })
+    });
+    
+    if (!response.ok) {
+      return { error: `Router returned ${response.status}` };
+    }
+    
+    const data = await response.json();
+    return data.result || data.error || { error: 'No result' };
+  } catch (error) {
+    return { error: error.message };
+  }
+}
+
+const rpcMethods = {
+  // Model Router integration
+  'model.services': async (params) => {
+    return await callModelRouter('model.getServices', params);
+  },
+  'model.request_access': async (params) => {
+    return await callModelRouter('model.requestAccess', params);
+  },
+  'model.approve_key': async (params) => {
+    return await callModelRouter('model.approveKey', params);
+  },
+  'model.deny_key': async (params) => {
+    return await callModelRouter('model.denyKey', params);
+  },
+  'model.get_key': async (params) => {
+    return await callModelRouter('model.getKey', params);
+  },
+  'model.limit_status': async (params) => {
+    return await callModelRouter('model.getLimitStatus', params);
+  },
+  'model.report_usage': async (params) => {
+    return await callModelRouter('model.updateUsage', params);
+  },
+  'model.select_optimal': async (params) => {
+    return await callModelRouter('model.selectOptimal', params);
+  },
+  'model.pending_approvals': async (params) => {
+    return { message: 'Check admin dashboard at http://localhost:3104/approvals' };
+  }
+};
+
 async function requestHandler(req, res) {
   res.setHeader('Content-Type', 'application/json');
 
@@ -189,7 +248,30 @@ async function requestHandler(req, res) {
     return;
   }
 
-  // ... (rest of server logic from original) ...
+  if (req.url === '/rpc' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+      try {
+        const { method, params, id } = JSON.parse(body);
+        
+        if (!rpcMethods[method]) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: 'Unknown method', id }));
+          return;
+        }
+        
+        const result = await rpcMethods[method](params || {});
+        res.writeHead(200);
+        res.end(JSON.stringify({ result, id }));
+      } catch (error) {
+        console.error('RPC error:', error);
+        res.writeHead(500);
+        res.end(JSON.stringify({ error: error.message }));
+      }
+    });
+    return;
+  }
   
   res.writeHead(404);
   res.end(JSON.stringify({ error: 'Not found' }));
