@@ -19,6 +19,7 @@ import crypto from 'crypto';
 import pg from 'pg';
 import fs from 'fs';
 import { EventEmitter } from 'events';
+import * as serviceRegistry from './service-registry-methods.js';
 
 const PORT = process.env.HYPHAE_PORT || 3100;
 const DB_URL = process.env.HYPHAE_DB_URL;
@@ -360,6 +361,29 @@ async function requestHandler(req, res) {
 
         let result;
         switch (method) {
+          // Phase 1: Service Registry
+          case 'services.register':
+            result = await serviceRegistry.handleServiceRegister(pool, params);
+            break;
+          case 'services.heartbeat':
+            result = await serviceRegistry.handleServiceHeartbeat(pool, params);
+            break;
+          case 'services.deregister':
+            result = await serviceRegistry.handleServiceDeregister(pool, params);
+            break;
+          
+          // Phase 2: Discovery & Integration
+          case 'services.discover':
+            result = await serviceRegistry.handleServiceDiscover(pool, params);
+            break;
+          case 'services.integrate':
+            result = await serviceRegistry.handleServiceIntegrate(pool, params);
+            break;
+          case 'services.listIntegrations':
+            result = await serviceRegistry.handleListIntegrations(pool, params);
+            break;
+          
+          // Existing methods
           case 'vault.get':
             result = await getSecret(params.agentId, params.secretName);
             break;
@@ -463,11 +487,16 @@ async function initializeDatabase() {
 async function start() {
   await initializeDatabase();
   
+  // Start Phase 1-2 services
+  serviceRegistry.startServiceHealthChecking(pool);
+  
   server.listen(PORT, () => {
     console.log(`[hyphae] ✓ Core running on port ${PORT}`);
     console.log(`[hyphae] ✓ Health check: GET /health`);
     console.log(`[hyphae] ✓ Metrics: GET /metrics`);
     console.log(`[hyphae] ✓ RPC: POST /rpc`);
+    console.log(`[hyphae] ✓ Service Registry: services.register, .heartbeat, .deregister`);
+    console.log(`[hyphae] ✓ Service Discovery: services.discover, .integrate, .listIntegrations`);
   });
 }
 
