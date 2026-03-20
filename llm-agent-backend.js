@@ -8,8 +8,17 @@
  * - Slash command handling
  */
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+// Support both agent-specific and generic API keys
+const getAnthropicKey = (agentId) => {
+  const agentKey = process.env[`${agentId.toUpperCase()}_CLAUDE_API_KEY`];
+  return agentKey || process.env.ANTHROPIC_API_KEY;
+};
+
+const getGeminiKey = (agentId) => {
+  const agentKey = process.env[`${agentId.toUpperCase()}_GEMINI_API_KEY`];
+  return agentKey || process.env.GEMINI_API_KEY;
+};
+
 const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
 const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent';
 
@@ -162,9 +171,9 @@ export async function generateAgentResponse(agentId, userMessage, conversationHi
     
     // Call appropriate API
     if (model.provider === 'anthropic') {
-      return await callClaude(model.name, systemPrompt, messages);
+      return await callClaude(agentId, model.name, systemPrompt, messages);
     } else if (model.provider === 'google') {
-      return await callGemini(model.name, systemPrompt, messages);
+      return await callGemini(agentId, model.name, systemPrompt, messages);
     } else {
       return `I'm configured to use ${model.name}, but that model is not available right now.`;
     }
@@ -192,15 +201,16 @@ function getAgentSystemPrompt(agentId) {
 
 // ── LLM API Calls ──
 
-async function callClaude(model, systemPrompt, messages) {
-  if (!ANTHROPIC_API_KEY) {
-    return "Claude API not configured. Please set ANTHROPIC_API_KEY.";
+async function callClaude(agentId, model, systemPrompt, messages) {
+  const apiKey = getAnthropicKey(agentId);
+  if (!apiKey) {
+    return `Claude API not configured for ${agentId}. Please set ${agentId.toUpperCase()}_CLAUDE_API_KEY or ANTHROPIC_API_KEY.`;
   }
   
   const response = await fetch(ANTHROPIC_API, {
     method: 'POST',
     headers: {
-      'x-api-key': ANTHROPIC_API_KEY,
+      'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json'
     },
@@ -214,7 +224,7 @@ async function callClaude(model, systemPrompt, messages) {
   
   if (!response.ok) {
     const error = await response.json();
-    console.error('[claude] API error:', error);
+    console.error(`[claude-${agentId}] API error:`, error);
     return `Claude API error: ${error.error?.message || 'Unknown error'}`;
   }
   
@@ -222,9 +232,10 @@ async function callClaude(model, systemPrompt, messages) {
   return data.content[0]?.text || 'No response from Claude';
 }
 
-async function callGemini(model, systemPrompt, messages) {
-  if (!GEMINI_API_KEY) {
-    return "Gemini API not configured. Please set GEMINI_API_KEY.";
+async function callGemini(agentId, model, systemPrompt, messages) {
+  const apiKey = getGeminiKey(agentId);
+  if (!apiKey) {
+    return `Gemini API not configured for ${agentId}. Please set ${agentId.toUpperCase()}_GEMINI_API_KEY or GEMINI_API_KEY.`;
   }
   
   // Convert Claude message format to Gemini format
@@ -233,7 +244,7 @@ async function callGemini(model, systemPrompt, messages) {
     parts: [{ text: msg.content }]
   }));
   
-  const response = await fetch(GEMINI_API + '?key=' + GEMINI_API_KEY, {
+  const response = await fetch(GEMINI_API + '?key=' + apiKey, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -250,7 +261,7 @@ async function callGemini(model, systemPrompt, messages) {
   
   if (!response.ok) {
     const error = await response.json();
-    console.error('[gemini] API error:', error);
+    console.error(`[gemini-${agentId}] API error:`, error);
     return `Gemini API error: ${error.error?.message || 'Unknown error'}`;
   }
   
