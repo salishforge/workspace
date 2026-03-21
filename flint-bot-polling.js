@@ -14,6 +14,7 @@
 import crypto from 'crypto';
 import pg from 'pg';
 import fs from 'fs';
+import fetch from 'node-fetch';
 
 const PORT = process.env.FLINT_BOT_PORT || 3201;
 const TELEGRAM_TOKEN = process.env.FLINT_TELEGRAM_BOT_API || '8512187116:AAFPkeNNpGIAEiY117OQw7l75CHabUH3ZU8';
@@ -287,13 +288,12 @@ async function getConversationHistory(userId, limit = 10) {
 async function storeMessage(userId, username, from, message) {
   try {
     await pool.query(
-      `INSERT INTO flint_conversation_history (user_id, username, agent_from, message) 
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT DO NOTHING`,
-      [userId, username, from, message]
+      `INSERT INTO flint_conversation_history (user_id, from_agent, message) 
+       VALUES ($1, $2, $3)`,
+      [userId, from, message]
     );
   } catch (error) {
-    // Silently ignore - not critical
+    console.error('[flint-bot] Store message error:', error.message);
   }
 }
 
@@ -303,18 +303,21 @@ async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS flint_conversation_history (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         user_id BIGINT NOT NULL,
-        username TEXT,
-        agent_from TEXT NOT NULL,
+        from_agent TEXT NOT NULL,
         message TEXT NOT NULL,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
       
-      CREATE INDEX IF NOT EXISTS idx_flint_user_id ON flint_conversation_history(user_id DESC);
+      CREATE INDEX IF NOT EXISTS idx_flint_user_id ON flint_conversation_history(user_id, created_at DESC);
     `);
     
     console.log('[flint-bot] ✅ Database initialized');
   } catch (error) {
-    console.warn('[flint-bot] Database init error:', error.message);
+    if (error.message.includes('already exists')) {
+      console.log('[flint-bot] ✅ Table exists');
+    } else {
+      console.warn('[flint-bot] Database init error:', error.message);
+    }
   }
 }
 

@@ -11,6 +11,7 @@
 
 import crypto from 'crypto';
 import pg from 'pg';
+import fetch from 'node-fetch';
 
 const PORT = process.env.CLIO_BOT_PORT || 3202;
 const TELEGRAM_TOKEN = process.env.CLIO_TELEGRAM_BOT_API || '8789255068:AAF92Z1thzb66VxMkH9l-03pMmaeGosnMqg';
@@ -215,12 +216,12 @@ async function getConversationHistory(userId, limit = 10) {
 async function storeMessage(userId, username, from, message) {
   try {
     await pool.query(
-      `INSERT INTO clio_conversation_history (user_id, username, agent_from, message) 
-       VALUES ($1, $2, $3, $4)`,
-      [userId, username, from, message]
+      `INSERT INTO clio_conversation_history (user_id, from_agent, message) 
+       VALUES ($1, $2, $3)`,
+      [userId, from, message]
     );
   } catch (error) {
-    // Silent
+    console.error('[clio-bot] Store error:', error.message);
   }
 }
 
@@ -230,18 +231,21 @@ async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS clio_conversation_history (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         user_id BIGINT NOT NULL,
-        username TEXT,
-        agent_from TEXT NOT NULL,
+        from_agent TEXT NOT NULL,
         message TEXT NOT NULL,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
       
-      CREATE INDEX IF NOT EXISTS idx_clio_user_id ON clio_conversation_history(user_id DESC);
+      CREATE INDEX IF NOT EXISTS idx_clio_user_id ON clio_conversation_history(user_id, created_at DESC);
     `);
     
     console.log('[clio-bot] ✅ Database initialized');
   } catch (error) {
-    console.warn('[clio-bot] Database init:', error.message);
+    if (error.message.includes('already exists')) {
+      console.log('[clio-bot] ✅ Table exists');
+    } else {
+      console.warn('[clio-bot] Database init:', error.message);
+    }
   }
 }
 
