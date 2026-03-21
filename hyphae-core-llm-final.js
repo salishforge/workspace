@@ -13,6 +13,7 @@ import crypto from 'crypto';
 import pg from 'pg';
 import fs from 'fs';
 import { EventEmitter } from 'events';
+import { agentCommsMethods, initializeAgentCommsSchema } from './hyphae-agent-comms.js';
 
 // ── LLM Integration (inline for reliability) ──
 
@@ -208,6 +209,29 @@ async function callModelRouter(method, params) {
 }
 
 const rpcMethods = {
+  // Agent-to-Agent Communication
+  'agent.sendMessage': async (params) => {
+    return await agentCommsMethods['agent.sendMessage'](params, pool);
+  },
+  'agent.getMessages': async (params) => {
+    return await agentCommsMethods['agent.getMessages'](params, pool);
+  },
+  'agent.ackMessage': async (params) => {
+    return await agentCommsMethods['agent.ackMessage'](params, pool);
+  },
+  'agent.broadcastCapabilities': async (params) => {
+    return await agentCommsMethods['agent.broadcastCapabilities'](params, pool);
+  },
+  'agent.discoverCapabilities': async (params) => {
+    return await agentCommsMethods['agent.discoverCapabilities'](params, pool);
+  },
+  'agent.getConversationHistory': async (params) => {
+    return await agentCommsMethods['agent.getConversationHistory'](params, pool);
+  },
+  'agent.listPendingMessages': async (params) => {
+    return await agentCommsMethods['agent.listPendingMessages'](params, pool);
+  },
+
   // Model Router integration
   'model.services': async (params) => {
     return await callModelRouter('model.getServices', params);
@@ -306,6 +330,8 @@ async function start() {
     console.log(`[hyphae] ✓ Core running on port ${PORT}`);
     console.log(`[hyphae] ✓ Health check: GET /health`);
     console.log(`[hyphae] ✓ RPC: POST /rpc`);
+    console.log(`[hyphae] ✓ Agent-to-Agent Communications: ENABLED`);
+    console.log(`[hyphae] ✓ RPC Methods: 7 agent comms + 14 model router`);
     
     // Start Telegram polling
     if (process.env.TELEGRAM_TOKEN) {
@@ -442,7 +468,10 @@ async function startLLMResponder() {
 
 // ── Database ──
 async function initializeDatabase() {
-  // Schema initialization (from original)
+  // Initialize agent-to-agent communication schema
+  await initializeAgentCommsSchema(pool);
+
+  // Human-agent message tables
   await pool.query(`
     CREATE TABLE IF NOT EXISTS hyphae_human_agent_messages (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

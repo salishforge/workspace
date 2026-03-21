@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
 /**
- * Clio Agent Bot - Polling Edition
+ * Clio Agent Bot - Polling Edition with Inter-Agent Communication
  * 
- * Polls Telegram for incoming messages (works without HTTPS)
- * Chief of Staff - Operations and coordination
+ * - Polls Telegram for incoming messages from humans
+ * - Polls Hyphae Core for messages from other agents
+ * - Responds autonomously to both
  * 
  * Port: 3202
  */
@@ -12,6 +13,7 @@
 import crypto from 'crypto';
 import pg from 'pg';
 import fetch from 'node-fetch';
+import { HyphaeAgentLoop } from './hyphae-agent-loop.js';
 
 const PORT = process.env.CLIO_BOT_PORT || 3202;
 const TELEGRAM_TOKEN = process.env.CLIO_TELEGRAM_BOT_API || '8789255068:AAF92Z1thzb66VxMkH9l-03pMmaeGosnMqg';
@@ -264,9 +266,36 @@ const server = http.createServer((req, res) => {
 async function start() {
   await initializeDatabase();
   
+  // Initialize inter-agent communication
+  const clio = new HyphaeAgentLoop('clio', [
+    'operations_coordination',
+    'memory_consolidation',
+    'priority_management',
+    'team_alignment'
+  ]);
+
+  // Start inter-agent communication
+  clio.startPolling(5000);
+  
+  // Override message handler for agent-to-agent communication
+  clio.handleAgentMessage = async (msg) => {
+    console.log(`[clio-bot] 📨 Processing message from ${msg.from}: ${msg.message.substring(0, 50)}`);
+    
+    // Generate response to other agent
+    if (msg.message.includes('cost') || msg.message.includes('budget')) {
+      const response = `Acknowledged operational issue. Reviewing budget allocation and operational constraints. Available to coordinate response.`;
+      await clio.sendMessage(msg.from, response, { incident_context: msg.context }, 'high');
+    } else if (msg.message.includes('coordinate') || msg.message.includes('align')) {
+      const response = `Chief of Staff standing by for coordination. Ready to align team and priorities.`;
+      await clio.sendMessage(msg.from, response, null, 'normal');
+    }
+  };
+  
   server.listen(PORT, () => {
     console.log(`[clio-bot] ✅ Clio Agent running on port ${PORT}`);
     console.log(`[clio-bot] ✅ Telegram polling: ACTIVE`);
+    console.log(`[clio-bot] ✅ Inter-agent communication: ACTIVE`);
+    console.log(`[clio-bot] ✅ Capabilities broadcast: operations_coordination, memory_consolidation, priority_management, team_alignment`);
   });
   
   console.log('[clio-bot] ✅ Starting message polling...');
