@@ -70,14 +70,30 @@ export const agentCommsMethods = {
         [agent_id, status, limit]
       );
 
-      const messages = result.rows.map(row => ({
-        id: row.id,
-        from: row.from_agent_id,
-        message: row.message,
-        context: JSON.parse(row.context || '{}'),
-        priority: row.priority,
-        received_at: row.created_at
-      }));
+      const messages = result.rows.map(row => {
+        // context is already JSONB from PostgreSQL, may be object or null
+        let context = {};
+        if (row.context) {
+          if (typeof row.context === 'string') {
+            try {
+              context = JSON.parse(row.context);
+            } catch (e) {
+              context = {};
+            }
+          } else {
+            context = row.context;
+          }
+        }
+
+        return {
+          id: row.id,
+          from: row.from_agent_id,
+          message: row.message,
+          context: context,
+          priority: row.priority,
+          received_at: row.created_at
+        };
+      });
 
       console.log(`[agent-comms] ${agent_id}: Retrieved ${messages.length} messages`);
 
@@ -176,13 +192,29 @@ export const agentCommsMethods = {
         [requesting_agent]
       );
 
-      const agents = result.rows.map(row => ({
-        agent_id: row.agent_id,
-        capabilities: JSON.parse(row.capabilities),
-        availability: row.availability,
-        contact_method: row.contact_method,
-        updated_at: row.updated_at
-      }));
+      const agents = result.rows.map(row => {
+        // capabilities is already JSONB from PostgreSQL
+        let capabilities = [];
+        if (row.capabilities) {
+          if (typeof row.capabilities === 'string') {
+            try {
+              capabilities = JSON.parse(row.capabilities);
+            } catch (e) {
+              capabilities = [];
+            }
+          } else {
+            capabilities = row.capabilities;
+          }
+        }
+
+        return {
+          agent_id: row.agent_id,
+          capabilities: capabilities,
+          availability: row.availability || 'always',
+          contact_method: row.contact_method || 'agent_message',
+          updated_at: row.updated_at
+        };
+      });
 
       console.log(`[agent-comms] ${requesting_agent}: Discovered ${agents.length} agents`);
 
@@ -221,14 +253,30 @@ export const agentCommsMethods = {
         [agent_1, agent_2, limit]
       );
 
-      const history = result.rows.map(row => ({
-        id: row.id,
-        from: row.from_agent_id,
-        to: row.to_agent_id,
-        message: row.message,
-        context: JSON.parse(row.context || '{}'),
-        timestamp: row.created_at
-      }));
+      const history = result.rows.map(row => {
+        // context is already JSONB from PostgreSQL
+        let context = {};
+        if (row.context) {
+          if (typeof row.context === 'string') {
+            try {
+              context = JSON.parse(row.context);
+            } catch (e) {
+              context = {};
+            }
+          } else {
+            context = row.context;
+          }
+        }
+
+        return {
+          id: row.id,
+          from: row.from_agent_id,
+          to: row.to_agent_id,
+          message: row.message,
+          context: context,
+          timestamp: row.created_at
+        };
+      });
 
       console.log(`[agent-comms] ${agent_1} ↔ ${agent_2}: Retrieved ${history.length} messages`);
 
@@ -270,6 +318,7 @@ export const agentCommsMethods = {
  */
 export async function initializeAgentCommsSchema(pool) {
   try {
+    // Create agent-to-agent messages table
     await pool.query(`
       CREATE TABLE IF NOT EXISTS hyphae_agent_agent_messages (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -283,29 +332,53 @@ export async function initializeAgentCommsSchema(pool) {
         created_at TIMESTAMPTZ DEFAULT NOW(),
         delivered_at TIMESTAMPTZ,
         processed_at TIMESTAMPTZ
-      );
+      )
+    `);
 
+    // Create indexes
+    await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_agent_messages_to ON hyphae_agent_agent_messages(to_agent_id, status, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_agent_messages_from ON hyphae_agent_agent_messages(from_agent_id, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_agent_messages_conversation ON hyphae_agent_agent_messages((CASE WHEN from_agent_id < to_agent_id THEN from_agent_id || ':' || to_agent_id ELSE to_agent_id || ':' || from_agent_id END), created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_agent_messages_conversation ON hyphae_agent_agent_messages((CASE WHEN from_agent_id < to_agent_id THEN from_agent_id || ':' || to_agent_id ELSE to_agent_id || ':' || from_agent_id END), created_at DESC)
+    `);
 
+    // Create or alter capabilities table with all columns
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS hyphae_agent_capabilities (
         agent_id TEXT PRIMARY KEY,
         capabilities JSONB NOT NULL,
         availability TEXT DEFAULT 'always',
         contact_method TEXT DEFAULT 'agent_message',
         updated_at TIMESTAMPTZ DEFAULT NOW()
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_agent_capabilities ON hyphae_agent_capabilities(agent_id);
+      )
     `);
 
-    console.log('[agent-comms] ✅ Schema initialized');
-  } catch (error) {
-    if (!error.message.includes('already exists')) {
-      throw error;
+    // Add missing columns if they don't exist
+    try {
+      await pool.query(`ALTER TABLE hyphae_agent_capabilities ADD COLUMN availability TEXT DEFAULT 'always'`);
+    } catch (e) {
+      if (!e.message.includes('already exists')) {
+        console.log('[agent-comms] Column availability already exists');
+      }
     }
-    console.log('[agent-comms] ✅ Schema already exists');
+
+    try {
+      await pool.query(`ALTER TABLE hyphae_agent_capabilities ADD COLUMN contact_method TEXT DEFAULT 'agent_message'`);
+    } catch (e) {
+      if (!e.message.includes('already exists')) {
+        console.log('[agent-comms] Column contact_method already exists');
+      }
+    }
+
+    // Create capabilities index
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_agent_capabilities ON hyphae_agent_capabilities(agent_id)
+    `);
+
+    console.log('[agent-comms] ✅ Schema initialized and verified');
+  } catch (error) {
+    console.error('[agent-comms] Schema error:', error.message);
+    throw error;
   }
 }
 
