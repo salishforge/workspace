@@ -37,7 +37,16 @@ const CONFIG = {
   DB_USER: 'postgres',
   DB_PASSWORD: process.env.DB_PASSWORD || 'hyphae-password-2026',
   DB_NAME: 'hyphae',
-  ENCRYPTION_KEY: process.env.HYPHAE_ENCRYPTION_KEY || 'hyphae-master-key-2026-salish-forge'
+  ENCRYPTION_KEY: process.env.HYPHAE_ENCRYPTION_KEY || 'hyphae-master-key-2026-salish-forge',
+  
+  // Service-specific tokens (from hyphae.env)
+  SERVICE_TOKENS: {
+    telegram: {
+      clio: process.env.CLIO_TELEGRAM_BOT_API || '',
+      flint: process.env.FLINT_TELEGRAM_BOT_API || '',
+      default: process.env.TELEGRAM_BOT_API || ''
+    }
+  }
 };
 
 const app = express();
@@ -243,6 +252,28 @@ async function getServiceEndpoint(serviceId) {
 }
 
 // ============================================================================
+// Service Token Injection (For services that require auth in URL)
+// ============================================================================
+
+function injectServiceToken(serviceId, agentId, url, pathSuffix) {
+  // Telegram requires: https://api.telegram.org/bot{TOKEN}/method
+  if (serviceId === 'telegram') {
+    const token = CONFIG.SERVICE_TOKENS.telegram[agentId] || CONFIG.SERVICE_TOKENS.telegram.default;
+    
+    if (!token) {
+      console.error(`[PROXY] ❌ No Telegram token configured for agent ${agentId}`);
+      return null;
+    }
+    
+    // Format: https://api.telegram.org/bot{TOKEN}/method
+    return `${url}/bot${token}${pathSuffix}`;
+  }
+  
+  // For other services, URL doesn't need token injection (passed in header or body)
+  return url + pathSuffix;
+}
+
+// ============================================================================
 // Proxy Middleware
 // ============================================================================
 
@@ -316,11 +347,20 @@ app.all('/*', async (req, res) => {
   console.log(`[PROXY] ✅ Service endpoint: ${serviceEndpoint}`);
   
   // =====================================================================
-  // Step 4: Forward request to actual service
+  // Step 4: Inject service tokens if needed
   // =====================================================================
   
-  const targetUrl = `${serviceEndpoint}${pathSuffix}`;
-  console.log(`[PROXY] 🔄 Forwarding to: ${targetUrl}`);
+  const targetUrlWithToken = injectServiceToken(serviceId, agentId, serviceEndpoint, pathSuffix);
+  if (!targetUrlWithToken) {
+    console.log(`[PROXY] ❌ Token injection failed for ${serviceId}`);
+    await logProxyRequest(agentId, serviceId, req.method, req.path, 503, false, 'Token injection failed');
+    return res.status(503).json({ error: 'Service token not configured' });
+  }
+  
+  const targetUrl = targetUrlWithToken;
+  // Redact bot token in logs for security
+  const redactedUrl = targetUrl.replace(/bot[A-Za-z0-9_:\-]+/, 'bot[REDACTED]');
+  console.log(`[PROXY] 🔄 Forwarding to: ${redactedUrl}`);
   
   try {
     // Build proxy headers (remove auth, add proxy info)
@@ -339,6 +379,9 @@ app.all('/*', async (req, res) => {
     // Forward body if present
     if (req.body && Object.keys(req.body).length > 0) {
       proxyOptions.body = JSON.stringify(req.body);
+      console.log(`[PROXY] 📦 Body: ${proxyOptions.body.substring(0, 100)}...`);
+    } else {
+      console.log(`[PROXY] ⚠️  No body to forward`);
     }
     
     const proxyResponse = await fetch(targetUrl, proxyOptions);
