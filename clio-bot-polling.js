@@ -14,6 +14,7 @@ import crypto from 'crypto';
 import pg from 'pg';
 import fetch from 'node-fetch';
 import { HyphaeAgentLoop } from './hyphae-agent-loop.js';
+import { AgentAutonomy } from './hyphae-agent-autonomy.js';
 
 const PORT = process.env.CLIO_BOT_PORT || 3202;
 const TELEGRAM_TOKEN = process.env.CLIO_TELEGRAM_BOT_API || '8789255068:AAF92Z1thzb66VxMkH9l-03pMmaeGosnMqg';
@@ -263,6 +264,46 @@ const server = http.createServer((req, res) => {
   }
 });
 
+// ── Operational Monitoring for Autonomous Triggers ──
+
+function startOperationalMonitoring(autonomy) {
+  // Monitor for coordination opportunities
+  setInterval(async () => {
+    // Check if Flint has sent any urgent messages about cost
+    try {
+      const response = await fetch('http://localhost:3100/rpc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          method: 'agent.getMessages',
+          params: { agent_id: 'clio', limit: 5 },
+          id: Date.now()
+        })
+      });
+
+      const data = await response.json();
+      const messages = data.result?.messages || [];
+
+      for (const msg of messages) {
+        if (msg.priority === 'urgent' && msg.message.includes('cost')) {
+          console.log('[clio-bot] Urgent cost message from Flint detected - autonomous response triggered');
+          
+          // Trigger coordination response
+          await autonomy.coordinateIfNeeded('cost_spike_response', {
+            amount: msg.context?.amount,
+            threshold: msg.context?.threshold,
+            departments: ['engineering', 'infrastructure']
+          });
+        }
+      }
+    } catch (e) {
+      // Silent fail - this is async monitoring
+    }
+  }, 45000); // Check every 45s
+
+  console.log('[clio-bot] Operational monitoring: Active (watching for cost/priority issues)');
+}
+
 async function start() {
   await initializeDatabase();
   
@@ -273,6 +314,9 @@ async function start() {
     'priority_management',
     'team_alignment'
   ]);
+
+  // Initialize autonomy framework
+  const autonomy = new AgentAutonomy('clio', 'Chief of Staff');
 
   // Initialize with Hyphae on startup
   console.log('[clio-bot] Requesting onboarding from Hyphae...');
@@ -300,6 +344,10 @@ async function start() {
 
   // Start inter-agent communication
   clio.startPolling(5000);
+
+  // Start autonomy framework
+  console.log('[clio-bot] ✅ Autonomy framework: ACTIVE');
+  startOperationalMonitoring(autonomy);
   
   // Override message handler for agent-to-agent communication
   clio.handleAgentMessage = async (msg) => {

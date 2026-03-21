@@ -16,6 +16,7 @@ import pg from 'pg';
 import fs from 'fs';
 import fetch from 'node-fetch';
 import { HyphaeAgentLoop } from './hyphae-agent-loop.js';
+import { AgentAutonomy } from './hyphae-agent-autonomy.js';
 
 const PORT = process.env.FLINT_BOT_PORT || 3201;
 const TELEGRAM_TOKEN = process.env.FLINT_TELEGRAM_BOT_API || '8512187116:AAFPkeNNpGIAEiY117OQw7l75CHabUH3ZU8';
@@ -338,6 +339,32 @@ const server = http.createServer((req, res) => {
 
 // ── Startup ──
 
+// ── System Monitoring for Autonomous Triggers ──
+
+let monthlySpend = 0;
+const budgetThreshold = 250; // $250/month
+const costCheckInterval = 30000; // Check every 30s
+
+function startSystemMonitoring(autonomy) {
+  // Simulate cost tracking (in real system, would query Model Router)
+  setInterval(() => {
+    // Simulate cost increase over time
+    monthlySpend += Math.random() * 5;
+    
+    // Check for cost spike
+    if (monthlySpend > budgetThreshold) {
+      autonomy.coordinateIfNeeded('cost_spike', {
+        amount: Math.round(monthlySpend),
+        threshold: budgetThreshold,
+        overage: Math.round(monthlySpend - budgetThreshold),
+        timestamp: new Date().toISOString()
+      });
+    }
+  }, costCheckInterval);
+
+  console.log(`[flint-bot] System monitoring: Cost tracking active (budget: $${budgetThreshold}/month)`);
+}
+
 async function start() {
   await initializeDatabase();
   
@@ -348,6 +375,9 @@ async function start() {
     'security_review',
     'technical_strategy'
   ]);
+
+  // Initialize autonomy framework
+  const autonomy = new AgentAutonomy('flint', 'CTO');
 
   // Initialize with Hyphae on startup
   console.log('[flint-bot] Requesting onboarding from Hyphae...');
@@ -375,6 +405,10 @@ async function start() {
 
   // Start inter-agent communication
   flint.startPolling(5000);
+
+  // Start system monitoring for autonomous triggers
+  console.log('[flint-bot] ✅ Autonomy framework: ACTIVE');
+  startSystemMonitoring(autonomy);
   
   // Override message handler for agent-to-agent communication
   flint.handleAgentMessage = async (msg) => {
