@@ -349,6 +349,30 @@ async function start() {
     'technical_strategy'
   ]);
 
+  // Initialize with Hyphae on startup
+  console.log('[flint-bot] Requesting onboarding from Hyphae...');
+  try {
+    const response = await fetch('http://localhost:3100/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: 'agent.initialize',
+        params: { agent_id: 'flint' },
+        id: Date.now()
+      })
+    });
+    
+    const data = await response.json();
+    if (data.result && data.result.status === 'initialized') {
+      console.log('[flint-bot] ✅ Onboarding complete');
+      console.log('[flint-bot] ✅ Decision authority: autonomous + coordination with Clio');
+      console.log('[flint-bot] ✅ Coordination triggers: ' + 
+        data.result.briefing.coordination_triggers.map(t => t.trigger).join(', '));
+    }
+  } catch (e) {
+    console.error('[flint-bot] Onboarding error:', e.message);
+  }
+
   // Start inter-agent communication
   flint.startPolling(5000);
   

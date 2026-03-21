@@ -274,6 +274,30 @@ async function start() {
     'team_alignment'
   ]);
 
+  // Initialize with Hyphae on startup
+  console.log('[clio-bot] Requesting onboarding from Hyphae...');
+  try {
+    const response = await fetch('http://localhost:3100/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: 'agent.initialize',
+        params: { agent_id: 'clio' },
+        id: Date.now()
+      })
+    });
+    
+    const data = await response.json();
+    if (data.result && data.result.status === 'initialized') {
+      console.log('[clio-bot] ✅ Onboarding complete');
+      console.log('[clio-bot] ✅ Decision authority: autonomous + coordination with Flint');
+      console.log('[clio-bot] ✅ Coordination triggers: ' + 
+        data.result.briefing.coordination_triggers.map(t => t.trigger).join(', '));
+    }
+  } catch (e) {
+    console.error('[clio-bot] Onboarding error:', e.message);
+  }
+
   // Start inter-agent communication
   clio.startPolling(5000);
   

@@ -205,6 +205,29 @@ export class HyphaeAgentLoop {
   }
 
   /**
+   * Get agent's onboarding briefing
+   */
+  async getBriefing() {
+    try {
+      const response = await fetch(`${this.hyphaeCoreUrl}/rpc`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          method: 'agent.getBriefing',
+          params: { agent_id: this.agentId },
+          id: Date.now()
+        })
+      });
+
+      const data = await response.json();
+      return data.result || null;
+    } catch (error) {
+      console.error(`[${this.agentId}] Briefing fetch error:`, error.message);
+      return null;
+    }
+  }
+
+  /**
    * Start continuous polling loop
    */
   startPolling(intervalMs = 5000) {
@@ -215,24 +238,33 @@ export class HyphaeAgentLoop {
 
     // Poll for messages periodically
     setInterval(() => this.pollForMessages(), intervalMs);
+    
+    // Process buffered messages periodically
+    setInterval(() => this.processMessageBuffer(), 3000);
   }
 
   /**
-   * Process buffered messages (implement in subclass)
+   * Process buffered messages
    */
   async processMessageBuffer() {
     while (this.messageBuffer.length > 0) {
       const msg = this.messageBuffer.shift();
-      await this.handleAgentMessage(msg);
+      try {
+        await this.handleAgentMessage(msg);
+      } catch (error) {
+        console.error(`[${this.agentId}] Error processing message:`, error.message);
+      }
     }
   }
 
   /**
-   * Handle incoming agent message (override in subclass)
+   * Handle incoming agent message (override in subclass for specific behavior)
+   * Default: just log it
    */
   async handleAgentMessage(msg) {
-    console.log(`[${this.agentId}] Processing message from ${msg.from}`);
-    // Subclass should override this
+    console.log(`[${this.agentId}] 📨 Message from ${msg.from}: "${msg.message.substring(0, 50)}..."`);
+    console.log(`[${this.agentId}]    Priority: ${msg.priority}, Context: ${JSON.stringify(msg.context || {})}`);
+    // Subclass should override this for specific behavior
   }
 }
 

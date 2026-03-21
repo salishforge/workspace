@@ -14,6 +14,7 @@ import pg from 'pg';
 import fs from 'fs';
 import { EventEmitter } from 'events';
 import { agentCommsMethods, initializeAgentCommsSchema } from './hyphae-agent-comms.js';
+import { agentOnboarding, initializeOnboardingSchema } from './hyphae-agent-onboarding.js';
 
 // ── LLM Integration (inline for reliability) ──
 
@@ -232,6 +233,17 @@ const rpcMethods = {
     return await agentCommsMethods['agent.listPendingMessages'](params, pool);
   },
 
+  // Agent Onboarding & Discovery
+  'agent.getBriefing': async (params) => {
+    return await agentOnboarding['agent.getBriefing'](params, pool);
+  },
+  'agent.getCapabilitiesManifest': async (params) => {
+    return await agentOnboarding['agent.getCapabilitiesManifest'](params, pool);
+  },
+  'agent.initialize': async (params) => {
+    return await agentOnboarding['agent.initialize'](params, pool);
+  },
+
   // Model Router integration
   'model.services': async (params) => {
     return await callModelRouter('model.getServices', params);
@@ -331,7 +343,8 @@ async function start() {
     console.log(`[hyphae] ✓ Health check: GET /health`);
     console.log(`[hyphae] ✓ RPC: POST /rpc`);
     console.log(`[hyphae] ✓ Agent-to-Agent Communications: ENABLED`);
-    console.log(`[hyphae] ✓ RPC Methods: 7 agent comms + 14 model router`);
+    console.log(`[hyphae] ✓ Agent Onboarding & Discovery: ENABLED`);
+    console.log(`[hyphae] ✓ RPC Methods: 10 agent core + 7 agent comms + 14 model router`);
     
     // Start Telegram polling
     if (process.env.TELEGRAM_TOKEN) {
@@ -470,6 +483,9 @@ async function startLLMResponder() {
 async function initializeDatabase() {
   // Initialize agent-to-agent communication schema
   await initializeAgentCommsSchema(pool);
+  
+  // Initialize agent onboarding schema
+  await initializeOnboardingSchema(pool);
 
   // Human-agent message tables
   await pool.query(`
