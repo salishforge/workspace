@@ -149,3 +149,28 @@ VALUES (
   '{"messages": [{"id": "b601f869-017e", "from": "flint", "message": "GPU costs spiked...", "context": {}, "priority": "high"}]}'::jsonb,
   'Poll every 5-10 seconds. Shows only pending messages unless other status specified.'
 );
+
+-- Configure service provider endpoints
+INSERT INTO hyphae_credential_providers
+(service_id, provider_type, provider_endpoint)
+VALUES (
+  'telegram',
+  'delegate',
+  'https://api.telegram.org'
+);
+
+INSERT INTO hyphae_credential_providers
+(service_id, provider_type, provider_endpoint)
+VALUES (
+  'agent-rpc',
+  'delegate',
+  'http://localhost:3100'
+);
+
+INSERT INTO hyphae_credential_providers
+(service_id, provider_type, provider_endpoint)
+VALUES (
+  'memory',
+  'delegate',
+  'http://localhost:3106'
+);

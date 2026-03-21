@@ -417,17 +417,39 @@ app.post('/credential/:agent_id/:service_id/request', async (req, res) => {
     res.status(201).json({
       status: 'success',
       message: 'Credential issued',
-      credential_id: credentialId,
+      credential_id: credentialId,  // Include ID for proxy requests
       credential_value: credentialValue,  // Only shown once!
       agent_id,
       service_id,
       issued_at: new Date().toISOString(),
       expires_at: null,
+      // Agents use the Hyphae proxy endpoint for hard enforcement
+      proxy_endpoint: 'http://localhost:3109',
       usage: {
-        format: 'Authorization: Bearer <credential_value>',
-        example: `Authorization: Bearer ${credentialValue}`
+        format: `POST http://localhost:3109/${service_id}/<method>`,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Credential-ID': credentialId.toString(),
+          'Authorization': `Bearer ${credentialValue}`  // For future use
+        },
+        example: `POST http://localhost:3109/${service_id}/sendMessage`,
+        example_headers: {
+          'X-Credential-ID': credentialId.toString(),
+          'Content-Type': 'application/json'
+        },
+        note: 'All requests go through Hyphae proxy for hard rate limiting + revocation enforcement'
       },
-      important: 'Save the credential_value immediately. It will not be shown again.'
+      rate_limit: {
+        telegram: '30 messages/minute',
+        'agent-rpc': '60 calls/minute',
+        memory: '1000 calls/minute'
+      },
+      important: [
+        'Save credential_id and credential_value immediately.',
+        'Include X-Credential-ID header in all proxy requests.',
+        'credential_id enables hard revocation enforcement.',
+        'These values will not be shown again.'
+      ]
     });
   } catch (error) {
     console.error(`Credential request error: ${error.message}`);
