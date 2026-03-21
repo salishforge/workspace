@@ -15,6 +15,10 @@ import fs from 'fs';
 import { EventEmitter } from 'events';
 import { agentCommsMethods, initializeAgentCommsSchema } from './hyphae-agent-comms.js';
 import { agentOnboarding, initializeOnboardingSchema } from './hyphae-agent-onboarding.js';
+import SecretsManager from './hyphae-secrets-manager.js';
+import AgentRegistry from './hyphae-agent-registry.js';
+import AuthMiddleware from './hyphae-auth-middleware.js';
+import AgentBootstrap from './hyphae-agent-bootstrap.js';
 
 // ── LLM Integration (inline for reliability) ──
 
@@ -178,6 +182,9 @@ const DB_URL = process.env.HYPHAE_DB_URL;
 const { Pool } = pg;
 const pool = new Pool({ connectionString: DB_URL });
 
+// Initialize auth middleware
+const authMiddleware = new AuthMiddleware();
+
 // ── Server ──
 const server = http.createServer();
 
@@ -242,6 +249,30 @@ const rpcMethods = {
   },
   'agent.initialize': async (params) => {
     return await agentOnboarding['agent.initialize'](params, pool);
+  },
+
+  // Agent Registration & Bootstrap
+  'agent.register': async (params) => {
+    // Note: Registration doesn't require auth (bootstrap endpoint)
+    const { agent_id, metadata } = params;
+    if (!agent_id) {
+      return { error: 'Missing agent_id' };
+    }
+    return await AgentRegistry.registerAgent(pool, agent_id, metadata);
+  },
+  'agent.bootstrap': async (params) => {
+    // Bootstrap service (no auth required - initial setup)
+    const { agent_id, metadata } = params;
+    if (!agent_id) {
+      return { error: 'Missing agent_id' };
+    }
+    const bootstrap = new AgentBootstrap();
+    return await bootstrap.bootstrapAgent(pool, agent_id, metadata);
+  },
+  'agent.getCatalog': async (params) => {
+    // Service catalog (no auth required)
+    const bootstrap = new AgentBootstrap();
+    return bootstrap.getServiceCatalog();
   },
 
   // Model Router integration
@@ -316,6 +347,59 @@ async function requestHandler(req, res) {
           res.end(JSON.stringify({ error: 'Unknown method', id }));
           return;
         }
+
+        // Check if method requires authentication
+        const authRequiredMethods = [
+          'agent.sendMessage',
+          'agent.getMessages',
+          'agent.ackMessage',
+          'agent.discoverCapabilities',
+          'agent.getConversationHistory',
+          'model.services',
+          'model.requestAccess',
+          'model.getKey',
+          'model.getLimitStatus',
+          'model.selectOptimal'
+        ];
+
+        if (authRequiredMethods.includes(method)) {
+          // Extract API key from Authorization header
+          const authHeader = req.headers.authorization || '';
+          const apiKey = authHeader.replace('Bearer ', '');
+
+          if (!apiKey) {
+            res.writeHead(401);
+            res.end(JSON.stringify({ error: 'Authentication required', id }));
+            return;
+          }
+
+          // Authenticate
+          const auth = await authMiddleware.authenticate(pool, apiKey);
+          if (!auth.authenticated) {
+            res.writeHead(401);
+            res.end(JSON.stringify({ error: auth.error, id }));
+            return;
+          }
+
+          // Check rate limit
+          const rateLimit = authMiddleware.checkRateLimit(auth.agentId);
+          if (!rateLimit.allowed) {
+            res.writeHead(429);
+            res.end(JSON.stringify({
+              error: 'Rate limit exceeded',
+              remaining: rateLimit.remaining,
+              resetAt: rateLimit.resetAt,
+              id
+            }));
+            return;
+          }
+
+          // Add agent ID to params for auditing
+          params.__agentId = auth.agentId;
+
+          // Log audit event
+          await authMiddleware.logAuditEvent(pool, auth.agentId, method, params, true);
+        }
         
         const result = await rpcMethods[method](params || {});
         res.writeHead(200);
@@ -344,7 +428,11 @@ async function start() {
     console.log(`[hyphae] ✓ RPC: POST /rpc`);
     console.log(`[hyphae] ✓ Agent-to-Agent Communications: ENABLED`);
     console.log(`[hyphae] ✓ Agent Onboarding & Discovery: ENABLED`);
-    console.log(`[hyphae] ✓ RPC Methods: 10 agent core + 7 agent comms + 14 model router`);
+    console.log(`[hyphae] ✓ Agent Registration & Bootstrap: ENABLED`);
+    console.log(`[hyphae] ✓ Secrets Manager: ENABLED`);
+    console.log(`[hyphae] ✓ Authentication & Rate Limiting: ENABLED`);
+    console.log(`[hyphae] ✓ Audit Logging: ENABLED`);
+    console.log(`[hyphae] ✓ RPC Methods: 13 agent core + 7 agent comms + 14 model router + 4 registration`);
     
     // Start Telegram polling
     if (process.env.TELEGRAM_TOKEN) {
@@ -486,6 +574,18 @@ async function initializeDatabase() {
   
   // Initialize agent onboarding schema
   await initializeOnboardingSchema(pool);
+
+  // Initialize secrets manager schema
+  await SecretsManager.initializeSchema(pool);
+
+  // Initialize agent registry schema
+  await AgentRegistry.initializeSchema(pool);
+
+  // Initialize auth middleware schema
+  await AuthMiddleware.initializeSchema(pool);
+
+  // Initialize bootstrap schema
+  await AgentBootstrap.initializeSchema(pool);
 
   // Human-agent message tables
   await pool.query(`
