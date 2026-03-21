@@ -469,9 +469,16 @@ Be strategic, decisive, and action-oriented. When Flint sends you an issue, prov
   }
 
   /**
-   * Make authenticated RPC call
+   * Make authenticated RPC call with full logging
    */
   async callRPC(method, params) {
+    const requestId = Date.now();
+    const startTime = Date.now();
+    
+    console.log(`[${this.agentId}] 🔄 RPC REQUEST (${requestId})`);
+    console.log(`[${this.agentId}]    Method: ${method}`);
+    console.log(`[${this.agentId}]    Params: ${JSON.stringify(params).substring(0, 100)}...`);
+    
     try {
       const response = await fetch(`${this.hyphaeCoreUrl}/rpc`, {
         method: 'POST',
@@ -482,14 +489,25 @@ Be strategic, decisive, and action-oriented. When Flint sends you an issue, prov
         body: JSON.stringify({
           method,
           params,
-          id: Date.now()
+          id: requestId
         })
       });
 
       const data = await response.json();
+      const elapsedMs = Date.now() - startTime;
+      
+      if (data.result) {
+        console.log(`[${this.agentId}] ✅ RPC SUCCESS (${elapsedMs}ms, ${requestId})`);
+        console.log(`[${this.agentId}]    Result: ${JSON.stringify(data.result).substring(0, 100)}...`);
+      } else if (data.error) {
+        console.log(`[${this.agentId}] ⚠️  RPC ERROR (${elapsedMs}ms, ${requestId})`);
+        console.log(`[${this.agentId}]    Error: ${data.error}`);
+      }
+      
       return data.result;
     } catch (error) {
-      console.error(`[${this.agentId}] RPC error (${method}): ${error.message}`);
+      console.error(`[${this.agentId}] ❌ RPC FAILED (${requestId})`);
+      console.error(`[${this.agentId}]    Exception: ${error.message}`);
       return null;
     }
   }
@@ -537,7 +555,7 @@ Be strategic, decisive, and action-oriented. When Flint sends you an issue, prov
   }
 
   /**
-   * Process incoming messages and respond
+   * Process incoming messages and respond (with actual RPC calls)
    */
   async processIncomingMessages() {
     try {
@@ -552,14 +570,19 @@ Be strategic, decisive, and action-oriented. When Flint sends you an issue, prov
         return;
       }
 
-      console.log(`[${this.agentId}] 📨 Received ${messages.length} message(s)`);
+      console.log(`\n[${this.agentId}] 📨 PROCESSING ${messages.length} MESSAGE(S)`);
+      console.log(`[${this.agentId}] ${'='.repeat(50)}`);
 
       for (const msg of messages) {
         // Extract plain text message (handle both formats)
         const messageText = this.extractMessageText(msg.message);
         const fromAgent = msg.from || msg.from_agent_id;
+        const msgContext = msg.context || {};
 
-        console.log(`[${this.agentId}]    From ${fromAgent}: "${messageText.substring(0, 50)}..."`);
+        console.log(`\n[${this.agentId}] ➤ MESSAGE FROM ${fromAgent}`);
+        console.log(`[${this.agentId}]    Content: "${messageText.substring(0, 60)}..."`);
+        console.log(`[${this.agentId}]    Priority: ${msg.priority}`);
+        console.log(`[${this.agentId}]    Context: ${JSON.stringify(msgContext).substring(0, 60)}...`);
 
         // Reason about the message
         const situation = `
@@ -567,7 +590,7 @@ You received a message from ${fromAgent}:
 
 "${messageText}"
 
-Context: ${JSON.stringify(msg.context || {})}
+Context data: ${JSON.stringify(msgContext)}
 Priority: ${msg.priority}
 
 Think carefully about this and respond appropriately. What should you do?
@@ -576,19 +599,21 @@ If you need to send a response to ${fromAgent}, start your response with:
 
 Otherwise, just reason through it.`;
 
+        console.log(`[${this.agentId}] 🧠 REASONING about message...`);
         const reasoning = await this.reasonAndRespond(situation);
 
         if (reasoning) {
-          console.log(`[${this.agentId}] 🧠 Reasoning: ${reasoning.substring(0, 100)}...`);
+          console.log(`[${this.agentId}] 💭 Reasoning: ${reasoning.substring(0, 100)}...`);
 
           // Check if reasoning indicates sending a message
           if (reasoning.includes(`[SEND_TO_${fromAgent.toUpperCase()}]:`)) {
+            console.log(`[${this.agentId}] ✅ DECISION: Send response to ${fromAgent}`);
+            
             let responseText = reasoning.split(`[SEND_TO_${fromAgent.toUpperCase()}]:`)[1].trim();
 
             // Clean up response text - remove JSON if Gemini returned it
             if (responseText.startsWith('{')) {
               try {
-                // Try to parse as JSON and extract the message field
                 const parsed = JSON.parse(responseText);
                 if (parsed.message) {
                   responseText = parsed.message;
@@ -598,31 +623,42 @@ Otherwise, just reason through it.`;
               }
             }
 
+            console.log(`[${this.agentId}] 📝 Response text: "${responseText.substring(0, 60)}..."`);
+            console.log(`[${this.agentId}] 🚀 SENDING authenticated RPC call to Hyphae...`);
+
             // Send response with JUST the message text, not JSON
             const sendResult = await this.callRPC('agent.sendMessage', {
               from_agent_id: this.agentId,
               to_agent_id: fromAgent,
-              message: responseText,  // Plain text only
-              context: { reply_to_message_id: msg.id },
+              message: responseText,
+              context: { 
+                reply_to_message_id: msg.id,
+                replied_at: new Date().toISOString()
+              },
               priority: msg.priority || 'normal'
             });
 
             if (sendResult?.success || sendResult?.message_id) {
-              console.log(`[${this.agentId}] 📤 Sent response to ${fromAgent}`);
+              console.log(`[${this.agentId}] ✅ RESPONSE SENT (Message ID: ${sendResult.message_id})`);
             } else {
-              console.log(`[${this.agentId}] ⚠️  Send failed: ${JSON.stringify(sendResult)}`);
+              console.log(`[${this.agentId}] ❌ RESPONSE FAILED: ${JSON.stringify(sendResult)}`);
             }
+          } else {
+            console.log(`[${this.agentId}] ℹ️  DECISION: Process autonomously (no response needed)`);
           }
         }
 
         // Acknowledge
+        console.log(`[${this.agentId}] 📋 Acknowledging message...`);
         await this.callRPC('agent.ackMessage', {
           message_id: msg.id,
           processed_by: this.agentId
         });
       }
+      
+      console.log(`[${this.agentId}] ${'='.repeat(50)}\n`);
     } catch (error) {
-      console.error(`[${this.agentId}] Message processing error: ${error.message}`);
+      console.error(`[${this.agentId}] ❌ Message processing error: ${error.message}`);
     }
   }
 
@@ -726,6 +762,49 @@ Otherwise, just reason through it.`;
   }
 
   /**
+   * Proactive issue detection and messaging (Flint only)
+   */
+  async detectAndProactivelyMessage() {
+    if (this.agentId !== 'flint') return; // Only Flint does this
+    
+    // Simulate cost monitoring
+    const randomValue = Math.random();
+    
+    // 20% chance to detect an issue every 30 seconds
+    if (randomValue < 0.2) {
+      console.log(`[${this.agentId}] 🚨 DETECTED: Cost spike in GPU training service`);
+      
+      const message = `Cost spike detected: GPU training service costs jumped 400% in the last 2 hours. Current rate: $2400/day above baseline. Need your operational assessment and guidance on whether to pause non-critical jobs or investigate GPU utilization.`;
+      
+      const context = {
+        incident_type: 'cost_spike',
+        service: 'gpu_training',
+        cost_delta: '+$2400/day',
+        threshold_breach: '400%',
+        duration_minutes: 120,
+        severity: 'high',
+        recommendation_options: ['pause_non_critical_jobs', 'investigate_utilization', 'escalate_to_john']
+      };
+      
+      console.log(`[${this.agentId}] 📤 PROACTIVE: Sending issue to Clio for operational guidance`);
+      
+      const result = await this.callRPC('agent.sendMessage', {
+        from_agent_id: this.agentId,
+        to_agent_id: 'clio',
+        message: message,
+        context: context,
+        priority: 'high'
+      });
+      
+      if (result?.success || result?.message_id) {
+        console.log(`[${this.agentId}] ✅ PROACTIVE MESSAGE SENT to Clio`);
+      } else {
+        console.log(`[${this.agentId}] ❌ PROACTIVE MESSAGE FAILED`);
+      }
+    }
+  }
+
+  /**
    * Start autonomous operation loop
    */
   startOperationLoop() {
@@ -742,6 +821,11 @@ Otherwise, just reason through it.`;
 
     // Check for service updates every 60 seconds
     setInterval(() => this.checkServiceUpdates(), 60000);
+
+    // Flint: Proactive issue detection every 30 seconds
+    if (this.agentId === 'flint') {
+      setInterval(() => this.detectAndProactivelyMessage(), 30000);
+    }
   }
 }
 
