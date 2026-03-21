@@ -19,6 +19,7 @@ import SecretsManager from './hyphae-secrets-manager.js';
 import AgentRegistry from './hyphae-agent-registry.js';
 import AuthMiddleware from './hyphae-auth-middleware.js';
 import AgentBootstrap from './hyphae-agent-bootstrap.js';
+import ServiceRegistry from './hyphae-service-registry.js';
 
 // ── LLM Integration (inline for reliability) ──
 
@@ -271,8 +272,29 @@ const rpcMethods = {
   },
   'agent.getCatalog': async (params) => {
     // Service catalog (no auth required)
-    const bootstrap = new AgentBootstrap();
-    return bootstrap.getServiceCatalog();
+    return ServiceRegistry.getServiceCatalog();
+  },
+
+  // Service updates (auth required)
+  'agent.getServiceUpdates': async (params) => {
+    const { agent_id, last_catalog_version } = params;
+    if (!agent_id) {
+      return { error: 'Missing agent_id' };
+    }
+    return await ServiceRegistry.getAgentUpdates(pool, agent_id, last_catalog_version);
+  },
+
+  'agent.subscribeToUpdates': async (params) => {
+    const { agent_id } = params;
+    if (!agent_id) {
+      return { error: 'Missing agent_id' };
+    }
+    const success = await ServiceRegistry.subscribeAgent(pool, agent_id);
+    return {
+      success: success,
+      message: `Agent ${agent_id} subscribed to service updates`,
+      will_receive_updates: true
+    };
   },
 
   // Model Router integration
@@ -586,6 +608,9 @@ async function initializeDatabase() {
 
   // Initialize bootstrap schema
   await AgentBootstrap.initializeSchema(pool);
+
+  // Initialize service registry schema
+  await ServiceRegistry.initializeSchema(pool);
 
   // Human-agent message tables
   await pool.query(`

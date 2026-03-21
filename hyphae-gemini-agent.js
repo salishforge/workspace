@@ -274,16 +274,96 @@ Otherwise, just reason through it.`;
   }
 
   /**
+   * Subscribe to service updates
+   */
+  async subscribeToUpdates() {
+    try {
+      const result = await this.callRPC('agent.subscribeToUpdates', {
+        agent_id: this.agentId
+      });
+
+      if (result?.success) {
+        console.log(`[${this.agentId}] 📬 Subscribed to service updates`);
+      }
+    } catch (error) {
+      console.error(`[${this.agentId}] Subscription error: ${error.message}`);
+    }
+  }
+
+  /**
+   * Check for service updates
+   */
+  async checkServiceUpdates() {
+    try {
+      const result = await this.callRPC('agent.getServiceUpdates', {
+        agent_id: this.agentId,
+        last_catalog_version: this.catalog?.version
+      });
+
+      if (result && result.length > 0) {
+        console.log(`[${this.agentId}] 🆕 Service updates available:`);
+        
+        result.forEach(update => {
+          console.log(`[${this.agentId}]    Version ${update.version}:`);
+          if (update.new_services?.length > 0) {
+            console.log(`[${this.agentId}]      New: ${update.new_services.join(', ')}`);
+          }
+          if (update.deprecated_services?.length > 0) {
+            console.log(`[${this.agentId}]      Deprecated: ${update.deprecated_services.join(', ')}`);
+          }
+        });
+
+        // Refresh catalog
+        await this.refreshCatalog();
+      }
+    } catch (error) {
+      console.error(`[${this.agentId}] Update check error: ${error.message}`);
+    }
+  }
+
+  /**
+   * Refresh service catalog
+   */
+  async refreshCatalog() {
+    try {
+      const response = await fetch(`${this.hyphaeCoreUrl}/rpc`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          method: 'agent.getCatalog',
+          params: {},
+          id: Date.now()
+        })
+      });
+
+      const data = await response.json();
+      
+      if (data.result?.services) {
+        this.catalog = data.result;
+        console.log(`[${this.agentId}] 🔄 Catalog refreshed (v${this.catalog.version})`);
+      }
+    } catch (error) {
+      console.error(`[${this.agentId}] Catalog refresh error: ${error.message}`);
+    }
+  }
+
+  /**
    * Start autonomous operation loop
    */
   startOperationLoop() {
     console.log(`[${this.agentId}] ⚡ Starting autonomous operation loop`);
+
+    // Subscribe to updates
+    this.subscribeToUpdates();
 
     // Poll for messages every 5 seconds
     setInterval(() => this.processIncomingMessages(), 5000);
 
     // Discover peers every 30 seconds
     setInterval(() => this.discoverPeers(), 30000);
+
+    // Check for service updates every 60 seconds
+    setInterval(() => this.checkServiceUpdates(), 60000);
   }
 }
 
