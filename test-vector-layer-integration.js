@@ -10,7 +10,7 @@
  */
 
 import pg from 'pg';
-import { createEmbedder, toPgVector } from './nanoclaw-fork/memforge/consolidation/embedding.js';
+import { createEmbedder, toPgVector } from './memforge/consolidation/embedding.js';
 
 const DB_URL = process.env.MEMFORGE_DB_URL || 'postgresql://postgres:hyphae-password-2026@localhost:5433/hyphae';
 const pool = new pg.Pool({ connectionString: DB_URL, max: 5 });
